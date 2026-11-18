@@ -111,3 +111,50 @@ cmake -S src -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_PREFIX_PATH=$HOME/QGroundControl/Qt/6.11.1/gcc_64
 cmake --build build -j10
 ```
+
+## Step 9: Parameter file safety review
+
+File: `~/Downloads/param_list_current.param` (Mission Planner format, 1019 params, ArduCopter quad X with 4S battery).
+It was checked against the official ArduCopter 4.8 parameter metadata that QGC bundles (ranges, read-only flags, enum values).
+
+**Automatic checks**
+- 1018/1019 names are known. `GND_EFFECT_COMP` is not in the 4.8 metadata, and QGC will skip it if your firmware doesn't have it.
+- 28 read-only or hardware-specific params are never written by QGC: sensor `*_DEV_ID`/`*_ID`, `BARO*_GND_PRESS`, `STAT_*`, `MIS_TOTAL`. That's correct: they belong to the board.
+- "Out of range" hits are all **0 = disabled** defaults (`ATC_RAT_*_FF`, `*_FLTE`, `PSC_*_FLTD/FLTT`, `PSC_NE_VEL_FF`, `BRD_VSERVO_MIN`, `EK3_DRAG_BCOEF_Y`, `FENCE_TOTAL`, unused 3rd-IMU scales), plus ArduPilot's own default `ATC_RAT_YAW_FLTE=2`. They're harmless. The one real exception is `FENCE_ALT_MAX` (below).
+
+**Safety flags (values left as-is; your call)**
+
+| Param | Value | Why it matters | Suggested |
+|---|---|---|---|
+| `BATT_FS_LOW_ACT` | 0 (no action) | At 13.6 V (3.4 V/cell) nothing happens; only the critical level (13.2 V) forces a Land | 2 (RTL) |
+| `BATT_ARM_VOLT` | 13.2 | Same as the critical voltage, so you can arm on a nearly empty 4S pack | ~14.8 |
+| `FENCE_ALT_MAX` | 7 m | Below the documented minimum (10). Fence is off now, but if enabled it would breach at 7 m while `RTL_ALT_M` = 15 m, and RTL would climb straight into the fence | ≥ 20 m if you ever enable the fence |
+| `FLTMODE1/2` | 9 (Land) | Low switch position is LAND, and Copter won't arm in Land, so you must switch to Loiter or AltHold to arm. That may be intentional | Info only |
+| `FS_GCS_ENABLE` | 0 | Losing the QGC link does nothing. OK because the RC failsafe (`FS_THR_ENABLE`=3, Land) is on. Turn it on if you fly missions without RC | Info only |
+| Rate PIDs | 0.135 defaults, `INS_HNTCH_ENABLE`=0 | Never autotuned, and no harmonic notch. This is the real way to get a sharper response, not GCS settings | Notch + AutoTune later |
+
+Good: `ARMING_SKIPCHK`=0 (all checks on), EKF / vibration / crash / RC failsafes enabled, `SCHED_LOOP_RATE`=400, `BRD_SAFETY_DEFLT`=1.
+
+**How to load it in QGC (with the drone connected)**
+1. Connect over USB (SERIAL0, 115200) or the radio (SERIAL1, 57600). Wait for "Parameters loaded".
+2. **Back up first:** Vehicle Configuration → Parameters → Tools → *Save to file* → `~/QGroundControl/params-backup-YYYY-MM-DD.params`.
+3. Tools → *Load from file for review...* → choose `param_list_current.param`.
+4. QGC shows **only the params that differ** from the drone, each with a checkbox. Review, untick anything you don't want, then *Apply*.
+5. Reboot the flight controller (Tools → Reboot Vehicle) so INS, serial, CAN and similar settings take effect.
+
+## Step 10: Safe parameter copy
+
+`~/QGroundControl/param_list_safe.param` is identical to `~/Downloads/param_list_current.param` (left untouched) except:
+
+| Param | Original | Safe copy |
+|---|---|---|
+| `BATT_FS_LOW_ACT` | 0 | 2 (RTL at low battery, 13.6 V) |
+| `BATT_ARM_VOLT` | 13.2 | 14.8 (no arming on a nearly flat 4S pack) |
+| `FENCE_ALT_MAX` | 7 | 20 (fence still disabled; no longer below `RTL_ALT_M` = 15) |
+
+```bash
+sed -e 's/^BATT_FS_LOW_ACT,.*/BATT_FS_LOW_ACT,2/' \
+    -e 's/^BATT_ARM_VOLT,.*/BATT_ARM_VOLT,14.8/' \
+    -e 's/^FENCE_ALT_MAX,.*/FENCE_ALT_MAX,20/' \
+    ~/Downloads/param_list_current.param > ~/QGroundControl/param_list_safe.param
+```
