@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=TeamMARS Telemetry
+GenericName=Ground Control Station
+Comment=TeamMARS ground control and telemetry (based on QGroundControl 5.1.5)
+Exec=@HOME@/QGroundControl/build/Release/TeamMARS-Telemetry
+Path=@HOME@
+Icon=@HOME@/QGroundControl/TeamMARS-Telemetry.png
+Terminal=false
+Categories=Science;Engineering;
+StartupNotify=true
+StartupWMClass=TeamMARS-Telemetry

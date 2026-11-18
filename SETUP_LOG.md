@@ -271,3 +271,25 @@ All work is on git branch `teammars-glass` in `~/MethodicConfigurator` (base: up
 - GPL: whoever receives the app may ask for the source — share `~/MethodicConfigurator` (branch `teammars-glass`) if asked.
 
 ---
+
+## Step 17 — TeamMARS-Telemetry (rebranded glass QGC) (2026-11-18)
+
+Same QGroundControl 5.1.5 code and behaviour; only name, icon and colours changed. Git branch `teammars-telemetry` in `~/QGroundControl/src` (uncommitted).
+
+| Change | Where |
+|---|---|
+| Name `TeamMARS-Telemetry`, org `TeamMARS`, package `com.teammars.telemetry` | `cmake/CustomOptions.cmake` |
+| Stable build ON (drops "Daily" from the name, same as the official release) | `cmake/CustomOptions.cmake` |
+| MARS team logo (round, transparent) as window icon, toolbar logo and dock icon | `resources/TeamMARS/`, `qgcresources.qrc`, `QGCApplication.cc`, 3 toolbar QML files |
+| Toolbar logo button can show a PNG logo | `QGCToolBarButton.qml` |
+| Palette: bone surfaces, bottle-green buttons/highlights, vermilion tool-strip hover | `QGCPalette.cc` |
+
+Kept on purpose: all status/warning colours (green/yellow/orange/red, alerts, map trajectory). "Disconnected" toolbar colour is neutral charcoal so it can never be mistaken for green "Ready to fly".
+
+- Build: `cmake --build build -j10` → `~/QGroundControl/build/Release/TeamMARS-Telemetry`.
+- Settings carried over from the glass QGC to `~/.config/TeamMARS/TeamMARS-Telemetry.ini`; logs/missions now save to `~/Documents/TeamMARS-Telemetry`.
+- Dock: `teammars-telemetry.desktop` replaces `qgroundcontrol-glass.desktop`. Stock QGC AppImage still in the app menu.
+- Logo files: `~/TeamMARS-brand/` (original + round PNGs 32–512 px).
+- Test: launched, MARS logo in toolbar and window, colours applied; not yet connected to the drone.
+
+---
