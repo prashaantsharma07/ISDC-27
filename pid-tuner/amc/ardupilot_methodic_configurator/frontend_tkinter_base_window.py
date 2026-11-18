@@ -36,6 +36,13 @@ from screeninfo import get_monitors
 from ardupilot_methodic_configurator import _
 from ardupilot_methodic_configurator.backend_filesystem_program_settings import ProgramSettings
 from ardupilot_methodic_configurator.frontend_tkinter_font import get_safe_font_size
+from ardupilot_methodic_configurator.frontend_tkinter_glass_theme import (
+    FIELD_ABOVE_LIMIT,
+    FIELD_BELOW_LIMIT,
+    FIELD_DEFAULT_VALUE,
+    FROST,
+    apply_glass_theme,
+)
 from ardupilot_methodic_configurator.frontend_tkinter_navigation_lock import NavigationLock
 from ardupilot_methodic_configurator.frontend_tkinter_show import get_last_known_monitor_bounds, remember_monitor_bounds
 from ardupilot_methodic_configurator.macos_utilities import is_macos_sequoia_or_older
@@ -192,9 +199,8 @@ class BaseWindow:
         - Ensuring readable text colors across platforms (especially Linux dark themes)
 
         """
-        # Set the theme to 'alt' for consistent appearance
-        style = ttk.Style()
-        style.theme_use("alt")
+        # TeamMARS liquid-glass theme (bottle green / bone / vermilion)
+        style = apply_glass_theme(self.root)
 
         # Create custom styles - use the system font size directly.
         # Tk renders point-based fonts at the correct DPI size automatically;
@@ -205,14 +211,14 @@ class BaseWindow:
 
         # Configure Entry and Combobox styles with explicit foreground colors
         # This prevents white-on-white text issues on Linux with dark themes
-        style.configure("default_v.TEntry", fieldbackground="light blue", foreground="black")
-        style.configure("below_limit.TEntry", fieldbackground="orangered", foreground="black")
-        style.configure("above_limit.TEntry", fieldbackground="red3", foreground="white")
-        style.map("readonly.TCombobox", fieldbackground=[("readonly", "white")])
-        style.map("readonly.TCombobox", selectbackground=[("readonly", "white")])
+        style.configure("default_v.TEntry", fieldbackground=FIELD_DEFAULT_VALUE, foreground="black")
+        style.configure("below_limit.TEntry", fieldbackground=FIELD_BELOW_LIMIT, foreground="black")
+        style.configure("above_limit.TEntry", fieldbackground=FIELD_ABOVE_LIMIT, foreground="white")
+        style.map("readonly.TCombobox", fieldbackground=[("readonly", FROST)])
+        style.map("readonly.TCombobox", selectbackground=[("readonly", FROST)])
         style.map("readonly.TCombobox", selectforeground=[("readonly", "black")])
-        style.map("default_v.TCombobox", fieldbackground=[("readonly", "light blue")])
-        style.map("default_v.TCombobox", selectbackground=[("readonly", "light blue")])
+        style.map("default_v.TCombobox", fieldbackground=[("readonly", FIELD_DEFAULT_VALUE)])
+        style.map("default_v.TCombobox", selectbackground=[("readonly", FIELD_DEFAULT_VALUE)])
         style.map("default_v.TCombobox", selectforeground=[("readonly", "black")])
 
     @staticmethod

@@ -18,6 +18,7 @@ from typing import Any, ClassVar, NamedTuple, Optional, cast
 from weakref import WeakKeyDictionary
 
 from ardupilot_methodic_configurator import _
+from ardupilot_methodic_configurator.frontend_tkinter_glass_theme import apply_glass_theme
 from ardupilot_methodic_configurator.macos_utilities import is_macos_sequoia_or_older
 
 # Tooltip positioning constants
@@ -437,7 +438,7 @@ def get_monitor_bounds(widget: tk.Misc) -> MonitorBounds:
 def _make_dialog_root() -> tk.Tk:
     """Create a hidden Tk root positioned on the last known monitor for dialog centering."""
     root = tk.Tk(className="TeamMARSPIDTuner")
-    ttk.Style().theme_use("alt")
+    apply_glass_theme(root)
     if _last_known_monitor_bounds is not None:
         b = _last_known_monitor_bounds
         root.geometry(f"+{(b.left + b.right) // 2}+{(b.top + b.bottom) // 2}")

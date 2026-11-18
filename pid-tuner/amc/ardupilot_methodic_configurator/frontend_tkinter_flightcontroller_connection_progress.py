@@ -10,11 +10,11 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 import tkinter as tk
 from logging import error as logging_error
-from tkinter import ttk
 from types import TracebackType
 from typing import Literal, Self
 
 from ardupilot_methodic_configurator import _
+from ardupilot_methodic_configurator.frontend_tkinter_glass_theme import apply_glass_theme
 from ardupilot_methodic_configurator.frontend_tkinter_progress_window import ProgressWindow
 
 PROGRESS_FC_INIT_COMPLETE = 20
@@ -32,9 +32,8 @@ class FlightControllerConnectionProgress:
         self.temp_root: tk.Tk = tk.Tk(className="TeamMARSPIDTuner")
         self.temp_root.withdraw()  # Hide the temporary root window, we only want to show the progress window
 
-        # Set the theme to 'alt'
-        style = ttk.Style()
-        style.theme_use("alt")
+        # TeamMARS liquid-glass theme
+        apply_glass_theme(self.temp_root)
 
         self.progress_window: ProgressWindow = ProgressWindow(
             self.temp_root,

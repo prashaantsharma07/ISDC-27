@@ -14,6 +14,7 @@ from tkinter import ttk
 from typing import Generic, TypeVar, cast
 
 from ardupilot_methodic_configurator.frontend_tkinter_base_window import BaseWindow, center_over_parent
+from ardupilot_methodic_configurator.frontend_tkinter_glass_theme import BOTTLE_LIGHT
 from ardupilot_methodic_configurator.macos_utilities import is_macos_sequoia_or_older
 
 _ModelT = TypeVar("_ModelT")
@@ -57,7 +58,7 @@ class CalibrationPopupBase(BaseWindow, Generic[_ModelT]):  # pylint: disable=too
         )
         style.configure(
             "Done.Horizontal.TProgressbar",
-            background="#8fbc8f",
+            background=BOTTLE_LIGHT,
             borderwidth=0,
             thickness=24,
             troughcolor=style.lookup("Horizontal.TProgressbar", "troughcolor"),
