@@ -79,3 +79,35 @@ git clone --depth 1 --branch v5.1.5 --recurse-submodules --shallow-submodules \
     libgstreamer-plugins-good1.0-dev gstreamer1.0-plugins-ugly gstreamer1.0-libav \
     gstreamer1.0-rtsp gstreamer1.0-qt6 libpipewire-0.3-dev ninja-build mold ccache patchelf
   ```
+
+## Step 7: Liquid-glass UI changes (visual only)
+
+Design rules we followed:
+- **No live blur or shader effects.** A real backdrop blur would re-blur the moving map and video every frame and cost responsiveness. The glass look comes from translucency, a specular gradient, a bright 1px rim and a bottom inner shadow, all plain Rectangles with near-zero GPU cost.
+- **Safety colors are untouched.** Red, yellow, green and orange (warnings, failsafes, battery, GPS status) and alert colors are unchanged.
+- **Nothing outside the UI changed.** No MAVLink, vehicle, parameter or flight-logic code was touched.
+
+Files changed in `~/QGroundControl/src` (`git diff` shows everything):
+
+| File | Change |
+|---|---|
+| `src/QmlControls/GlassBackground.qml` (new) | Reusable glass panel: tinted translucent body, top sheen, bright rim, bottom inner shadow |
+| `src/QmlControls/CMakeLists.txt` | Registers `GlassBackground.qml` in the `QGroundControl.Controls` module |
+| `src/QmlControls/QGCPalette.cc` | Glass palette. Dark ("Indoor") theme: deep-navy smoked glass (`#0e1626`, 70% translucent panels), sky-cyan accent (`#38bdf8`). Light ("Outdoor") theme: frosted white glass, cyan accent (`#0ea5e9`) |
+| `src/Toolbar/FlyViewToolBar.qml` | One continuous glass strip behind the toolbar; the purple branding block now fades into the glass |
+| `src/QmlControls/ToolStrip.qml` | Left tool strip gets a glass body |
+| `src/FlyView/TelemetryValuesBar.qml` | Telemetry bar uses glass instead of a flat 75% box |
+| `src/QmlControls/DropPanel.qml` | Pop-out panels use glass at 93% opacity so forms stay readable over the map |
+| `src/QmlControls/QGCButton.qml` | Glossy sheen on all buttons |
+
+Tip: the glass look is strongest in **Application Settings → General → Color Scheme → Indoor** (dark). Use **Outdoor** in direct sunlight.
+
+## Step 8: Build
+
+```bash
+cd ~/QGroundControl
+export PATH=$HOME/QGroundControl/.venv/bin:$PATH
+cmake -S src -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_PREFIX_PATH=$HOME/QGroundControl/Qt/6.11.1/gcc_64
+cmake --build build -j10
+```

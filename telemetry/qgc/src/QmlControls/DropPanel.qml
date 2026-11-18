@@ -59,12 +59,12 @@ Popup {
         implicitWidth:  contentItem.implicitWidth + _innerMargin * 2 + _arrowPointWidth
         implicitHeight: contentItem.implicitHeight + _innerMargin * 2
 
-        Rectangle {
+        GlassBackground {
             x:      _dropRight ? _arrowPointWidth : 0
             radius: ScreenTools.defaultFontPixelHeight / 2
             width:  parent.implicitWidth - _arrowPointWidth
             height: parent.implicitHeight
-            color:  _qgcPal.window
+            tint:   Qt.rgba(_qgcPal.window.r, _qgcPal.window.g, _qgcPal.window.b, 0.93)
         }
 
         // Arrowhead

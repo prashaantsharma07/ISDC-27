@@ -26,6 +26,12 @@ Item {
 
     QGCPalette { id: qgcPal }
 
+    // Liquid-glass bar behind the whole toolbar
+    GlassBackground {
+        anchors.fill:   parent
+        radius:         0
+    }
+
     QGCFlickable {
         anchors.fill:       parent
         contentWidth:       toolBarLayout.width
@@ -52,7 +58,7 @@ Item {
                         orientation: Gradient.Horizontal
                         GradientStop { position: 0; color: _mainStatusBGColor }
                         //GradientStop { position: qgcButton.x + qgcButton.width; color: _mainStatusBGColor }
-                        GradientStop { position: 1; color: qgcPal.window }
+                        GradientStop { position: 1; color: "transparent" }
                     }
                 }
 
@@ -61,7 +67,7 @@ Item {
                     anchors.left:   gradientBackground.right
                     anchors.right:  parent.right
                     height:         parent.height
-                    color:          qgcPal.windowTransparent
+                    color:          "transparent"
                 }
 
                 RowLayout {
@@ -112,7 +118,7 @@ Item {
 
                 Rectangle {
                     anchors.fill:   parent
-                    color:          qgcPal.windowTransparent
+                    color:          "transparent"
                 }
 
                 GuidedActionConfirm {
@@ -132,7 +138,7 @@ Item {
 
                 Rectangle {
                     anchors.fill:   parent
-                    color:          qgcPal.windowTransparent
+                    color:          "transparent"
                 }
 
                 FlyViewToolBarIndicators {

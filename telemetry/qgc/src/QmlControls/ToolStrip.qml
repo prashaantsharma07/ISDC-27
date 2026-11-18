@@ -6,10 +6,17 @@ import QGroundControl.Controls
 
 Rectangle {
     id:         _root
-    color:      qgcPal.windowTransparent
+    color:      "transparent"
     width:      ScreenTools.defaultFontPixelWidth * 7
     height:     Math.min(maxHeight, toolStripColumn.height + (flickable.anchors.margins * 2))
     radius:     ScreenTools.defaultFontPixelWidth / 2
+
+    // Liquid-glass body (drawn beneath the buttons)
+    GlassBackground {
+        anchors.fill:   parent
+        radius:         parent.radius
+        z:              -1
+    }
 
     property alias  model:              repeater.model
     property real   maxHeight           ///< Maximum height for control, determines whether text is hidden to make control shorter

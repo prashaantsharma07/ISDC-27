@@ -15,13 +15,11 @@ Item {
     property alias settingsGroup:           factValueGrid.settingsGroup
     property alias specificVehicleForCard:  factValueGrid.specificVehicleForCard
 
-    Rectangle {
+    GlassBackground {
         id:         backgroundRect
         width:      control.width + extraWidth
         height:     control.height
-        color:      qgcPal.window
-        radius:     ScreenTools.defaultFontPixelWidth / 2
-        opacity:    0.75
+        radius:     ScreenTools.defaultFontPixelWidth
     }
 
     ColumnLayout {

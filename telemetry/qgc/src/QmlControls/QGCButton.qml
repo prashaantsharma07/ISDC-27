@@ -48,6 +48,17 @@ Button {
         border.color: qgcPal.buttonBorder
         color: primary ? qgcPal.primaryButton : qgcPal.button
 
+        // Glass sheen
+        Rectangle {
+            anchors.fill: parent
+            anchors.margins: parent.border.width
+            radius: Math.max(0, parent.radius - parent.border.width)
+            gradient: Gradient {
+                GradientStop { position: 0.0; color: Qt.rgba(1, 1, 1, qgcPal.globalTheme === QGCPalette.Light ? 0.45 : 0.16) }
+                GradientStop { position: 0.5; color: Qt.rgba(1, 1, 1, 0) }
+            }
+        }
+
         Rectangle {
             anchors.fill: parent
             color: qgcPal.buttonHighlight
