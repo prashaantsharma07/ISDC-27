@@ -260,3 +260,14 @@ All work is on git branch `teammars-glass` in `~/MethodicConfigurator` (base: up
 8. Undo (reversible): `cd ~/MethodicConfigurator && git stash -u` — bring back with `git stash pop`. Changes are not committed yet.
 
 ---
+
+## Step 16 — Tests + shareable Linux AppImage (2026-11-18)
+
+- **Tests**: 9,462 passed. 20 failures investigated: tests expecting the old name/theme were updated; theme code hardened so it never crashes on test stand-ins; 2 failed only when run in parallel (pass serially); 4 fail identically on untouched upstream v5.1.1 (component-inference acceptance tests, PyInstaller-archive test) — not caused by our changes.
+- **Build**: `cd ~/MethodicConfigurator && teammars/build_appimage.sh` (same recipe as upstream CI: PyInstaller → frozen-module check → smoke test → appimagetool 1.9.1), with TeamMARS name, icon and window class.
+- **Output**: `~/TeamMARS-share/` — `TeamMARS-PID-tuner_5.1.1_x86_64.AppImage` (67 MB), its `.sha256`, and `HOW_TO_RUN.txt` for teammates. Send the whole folder (Drive / pen drive / Telegram).
+- Verified: AppImage launches standalone with the glass theme and TeamMARS title.
+- Works on Ubuntu 24.04+ (built on 24.04). Teammates on older Linux or Windows need a build on GitHub Actions instead.
+- GPL: whoever receives the app may ask for the source — share `~/MethodicConfigurator` (branch `teammars-glass`) if asked.
+
+---

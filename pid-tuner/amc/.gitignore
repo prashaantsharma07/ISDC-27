@@ -40,3 +40,6 @@ tuning_report.csv
 .pytest*/
 /migration_test/
 /mutants/
+teammars/build/
+teammars/dist/
+git_hash.txt
