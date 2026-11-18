@@ -23,6 +23,7 @@ from ardupilot_methodic_configurator.backend_internet import webbrowser_open_url
 from ardupilot_methodic_configurator.data_model_par_dict import Par
 from ardupilot_methodic_configurator.formatting import format_filesize
 from ardupilot_methodic_configurator.frontend_tkinter_base_window import BaseWindow
+from ardupilot_methodic_configurator.frontend_tkinter_glass_theme import LINK_COLOR
 from ardupilot_methodic_configurator.frontend_tkinter_log_analysis import LogAnalysisReportWindow
 from ardupilot_methodic_configurator.frontend_tkinter_log_hardware_availability import build_hardware_tab
 from ardupilot_methodic_configurator.frontend_tkinter_scroll_frame import ScrollFrame
@@ -116,7 +117,7 @@ class LogAvailabilityReportWindow(BaseWindow):  # pylint: disable=too-many-insta
         link = ttk.Label(
             row,
             text=value,
-            foreground="blue",
+            foreground=LINK_COLOR,
             cursor="hand2",
             font=("TkDefaultFont", self.default_font_size, "underline"),
         )

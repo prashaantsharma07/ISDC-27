@@ -16,6 +16,7 @@ from tkinter import ttk
 
 from ardupilot_methodic_configurator.backend_internet import webbrowser_open_url
 from ardupilot_methodic_configurator.frontend_tkinter_font import get_safe_font_config, safe_font_nametofont
+from ardupilot_methodic_configurator.frontend_tkinter_glass_theme import LINK_COLOR
 from ardupilot_methodic_configurator.frontend_tkinter_show import show_tooltip_on_richtext_tag
 
 
@@ -103,7 +104,7 @@ class RichText(tk.Text):  # pylint: disable=too-many-ancestors
 
         """
         self.insert(index, text, (unique_name,))
-        self.tag_configure(unique_name, foreground="blue", underline=True)
+        self.tag_configure(unique_name, foreground=LINK_COLOR, underline=True)
         self.tag_bind(unique_name, "<Button-1>", lambda _: webbrowser_open_url(url))
         self.tag_bind(unique_name, "<Enter>", lambda _: self.config(cursor="hand2"))
         self.tag_bind(unique_name, "<Leave>", lambda _: self.config(cursor=""))

@@ -56,6 +56,7 @@ VERMILION = "#E34234"  # accent, used sparingly
 VERMILION_LIGHT = "#F07A6E"
 INK = "#1D2A24"  # main text: near-black with a green cast
 INK_MUTED = "#6B746C"
+LINK_COLOR = "#00855F"  # hyperlinks: brighter bottle green, still underlined
 
 # Semantic field colours used by the parameter editor (meaning must not change)
 FIELD_DEFAULT_VALUE = "#CFE8F3"  # was "light blue": parameter equals its default

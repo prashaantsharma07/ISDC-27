@@ -17,6 +17,7 @@ from ardupilot_methodic_configurator.backend_filesystem_program_settings import 
 from ardupilot_methodic_configurator.backend_internet import webbrowser_open_url
 from ardupilot_methodic_configurator.data_model_parameter_editor import ParameterEditor
 from ardupilot_methodic_configurator.frontend_tkinter_collapsible_label_frame import CollapsibleLabelFrame
+from ardupilot_methodic_configurator.frontend_tkinter_glass_theme import LINK_COLOR
 from ardupilot_methodic_configurator.frontend_tkinter_rich_text import get_widget_font_family_and_size
 from ardupilot_methodic_configurator.frontend_tkinter_show import show_tooltip
 
@@ -141,7 +142,7 @@ class DocumentationFrame:
         if url:
             # Create a font with underline attribute
             underlined_font = (font_family, font_size, "underline")
-            label.config(text=text, foreground="blue", cursor="hand2", font=underlined_font)
+            label.config(text=text, foreground=LINK_COLOR, cursor="hand2", font=underlined_font)
             label.bind("<Button-1>", lambda event: webbrowser_open_url(url))  # noqa: ARG005
             show_tooltip(label, url)
         else:

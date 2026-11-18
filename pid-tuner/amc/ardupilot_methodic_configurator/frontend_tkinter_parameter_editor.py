@@ -64,6 +64,7 @@ from ardupilot_methodic_configurator.frontend_tkinter_fc_banner_window import Fl
 from ardupilot_methodic_configurator.frontend_tkinter_file_browser import FileBrowserWindow
 from ardupilot_methodic_configurator.frontend_tkinter_file_browser_tasks import BackgroundTaskRunner
 from ardupilot_methodic_configurator.frontend_tkinter_font import get_safe_font_config
+from ardupilot_methodic_configurator.frontend_tkinter_glass_theme import LINK_COLOR
 from ardupilot_methodic_configurator.frontend_tkinter_log_availability import LogAvailabilityReportWindow
 from ardupilot_methodic_configurator.frontend_tkinter_mavlink_inspector import open_mavlink_inspector_window
 from ardupilot_methodic_configurator.frontend_tkinter_navigation_lock import NavigationLock
@@ -1543,7 +1544,7 @@ class ParameterEditorWindow(BaseWindow):  # pylint: disable=too-many-instance-at
             link_label = tk.Label(
                 dialog,
                 text=_("Click here to open the Tuning Guide relevant Section"),
-                fg="blue",
+                fg=LINK_COLOR,
                 cursor="hand2",
                 font=(str(safe_font_config["family"]), int(safe_font_config["size"]), "underline"),
             )
