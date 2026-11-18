@@ -226,9 +226,10 @@ class ProgramSettings:  # pylint: disable=too-many-public-methods
             # Fallback: try to find icon relative to the script
             package_path = Path(os_path.dirname(os_path.abspath(__file__)))
 
-        icon_path = str(package_path / "images" / "ArduPilot_icon.png")
-        if os_path.exists(icon_path):
-            return icon_path
+        for icon_name in ("TeamMARS_icon.png", "ArduPilot_icon.png"):  # TeamMARS icon first, upstream as fallback
+            icon_path = str(package_path / "images" / icon_name)
+            if os_path.exists(icon_path):
+                return icon_path
         # If no icon found, return empty string (GUI will handle the error)
         return ""
 

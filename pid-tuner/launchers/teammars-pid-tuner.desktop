@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=TeamMARS-PID-tuner(DRONE)
+GenericName=ArduPilot PID tuner
+Comment=TeamMARS liquid-glass edition of ArduPilot Methodic Configurator
+Exec=@HOME@/MethodicConfigurator/.venv/bin/ardupilot_methodic_configurator
+Path=@HOME@
+Icon=@HOME@/MethodicConfigurator/ardupilot_methodic_configurator/images/TeamMARS_icon.png
+Terminal=false
+Categories=Science;Engineering;
+StartupNotify=true
+StartupWMClass=teamMARSPIDTuner
