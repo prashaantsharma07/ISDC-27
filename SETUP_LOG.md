@@ -300,3 +300,17 @@ Kept on purpose: all status/warning colours (green/yellow/orange/red, alerts, ma
 - AppImage rebuilt and `~/TeamMARS-share/` refreshed (new `.sha256`). Re-send this version to the team.
 
 ---
+
+## Step 19 — TeamMARS-Telemetry AppImage for the team (2026-11-18)
+
+- Scalable icon: `resources/TeamMARS/TeamMARSLogo.svg` (MARS logo) replaces the QGC SVG in the package.
+- Packaged with QGC's own recipe (linuxdeploy + appimagetool, pinned SHA-256 downloads):
+  ```bash
+  cd ~/QGroundControl && cmake --build build -j10 && cmake --install build --config Release
+  ```
+  → `build/TeamMARS-Telemetry-x86_64.AppImage` (186 MB, Qt and libraries bundled).
+- Tested standalone: starts, MARS logo in toolbar, TeamMARS colours.
+- `~/TeamMARS-share/` now holds both apps + `.sha256` files + `HOW_TO_RUN.txt` (242 MB total) — send the whole folder.
+- Works on Ubuntu 24.04+ (built on 24.04).
+
+---

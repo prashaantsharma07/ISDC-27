@@ -1,21 +1,25 @@
-TeamMARS-PID-tuner(DRONE) 5.1.1 — Linux (x86_64)
-=================================================
+TeamMARS apps — Linux (x86_64)
+==============================
+
+  TeamMARS-Telemetry_5.1.5_x86_64.AppImage   ground control + telemetry (based on QGroundControl 5.1.5)
+  TeamMARS-PID-tuner_5.1.1_x86_64.AppImage   ArduPilot setup + PID tuning (based on ArduPilot Methodic Configurator)
 
 Needs: Ubuntu 24.04 or newer (or another recent 64-bit Linux).
 
-1. Copy TeamMARS-PID-tuner_5.1.1_x86_64.AppImage anywhere (e.g. your home folder).
-2. Right-click it -> Properties -> Permissions -> tick "Allow executing file as program"
-   (or in a terminal:  chmod +x TeamMARS-PID-tuner_5.1.1_x86_64.AppImage )
-3. Double-click it.
+1. Copy the .AppImage files anywhere (e.g. your home folder).
+2. Right-click each -> Properties -> Permissions -> tick "Allow executing file as program"
+   (or in a terminal:  chmod +x TeamMARS-*.AppImage )
+3. Double-click to start.
 
 If it says "Cannot mount AppImage / FUSE":   sudo apt install libfuse2t64
-If the drone's USB port is "busy": close QGroundControl / Mission Planner first —
-only one program can use the flight controller at a time.
+Drone USB port "busy"? Only one program can use the flight controller at a time —
+close the other TeamMARS app / QGroundControl / Mission Planner first.
+TeamMARS-Telemetry can't see the drone on USB? Add yourself to the dialout group once:
+   sudo usermod -aG dialout $USER     (then log out and back in)
 
-Safety: the app changes nothing on the drone until you press "Upload".
-It backs up parameters before each step.
+Safety: neither app changes anything on the drone until you press Upload / Write.
 
-Check the file is not corrupted (optional):
-  sha256sum -c TeamMARS-PID-tuner_5.1.1_x86_64.AppImage.sha256
+Check the files are not corrupted (optional):
+  sha256sum -c *.sha256
 
-Based on ArduPilot Methodic Configurator (GPL-3.0). Source code is available from the TeamMARS team on request.
+Both apps are open source (GPL-3.0); source code is available from TeamMARS on request.
