@@ -1,0 +1,7 @@
+# build outputs and local tool installs never go in git
+build/
+dist/
+*.AppImage
+.venv/
+__pycache__/
+*.log
