@@ -14,13 +14,13 @@ set(QGC_CUSTOM_DIR "custom" CACHE STRING "Custom build overlay directory, relati
 # Application Metadata
 # ============================================================================
 
-set(QGC_APP_NAME "QGroundControl" CACHE STRING "Application name")
+set(QGC_APP_NAME "TeamMARS-Telemetry" CACHE STRING "Application name")  # TeamMARS: was QGroundControl (no spaces: used as the CMake target name)
 string(TIMESTAMP _copyright_year "%Y")
-set(QGC_APP_COPYRIGHT "Copyright (c) ${_copyright_year} QGroundControl. All rights reserved." CACHE STRING "Copyright notice")
-set(QGC_APP_DESCRIPTION "Open Source Ground Control App" CACHE STRING "Application description")
-set(QGC_ORG_NAME "QGroundControl" CACHE STRING "Organization name")
+set(QGC_APP_COPYRIGHT "TeamMARS-Telemetry, based on QGroundControl. Copyright (c) ${_copyright_year} QGroundControl." CACHE STRING "Copyright notice")
+set(QGC_APP_DESCRIPTION "TeamMARS ground control and telemetry (based on QGroundControl)" CACHE STRING "Application description")
+set(QGC_ORG_NAME "TeamMARS" CACHE STRING "Organization name")
 set(QGC_ORG_DOMAIN "qgroundcontrol.com" CACHE STRING "Organization domain")
-set(QGC_PACKAGE_NAME "org.mavlink.qgroundcontrol" CACHE STRING "Package identifier")
+set(QGC_PACKAGE_NAME "com.teammars.telemetry" CACHE STRING "Package identifier")
 
 # Settings version - increment to clear stored settings on next boot after incompatible changes
 set(QGC_SETTINGS_VERSION "9" CACHE STRING "Settings schema version")
@@ -30,7 +30,7 @@ set(QGC_SETTINGS_VERSION "9" CACHE STRING "Settings schema version")
 # ============================================================================
 
 option(BUILD_SHARED_LIBS "Build using shared libraries" OFF)
-option(QGC_STABLE_BUILD "Stable release build (disables daily build features)" OFF)
+option(QGC_STABLE_BUILD "Stable release build (disables daily build features)" ON)  # TeamMARS: match the official stable release
 option(QGC_USE_CACHE "Enable compiler caching (ccache/sccache)" ON)
 option(QGC_USE_MOCCACHE "Cache moc output across clean builds" ON)
 option(QGC_UNITY_BUILD "Enable unity builds for faster compilation" OFF)
