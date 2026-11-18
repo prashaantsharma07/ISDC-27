@@ -169,3 +169,59 @@ sed -e 's/^BATT_FS_LOW_ACT,.*/BATT_FS_LOW_ACT,2/' \
   - **QGroundControl (stock)** (`org.mavlink.qgroundcontrol.desktop`) is the original AppImage. It stays in the app menu as a fallback.
 - The custom build loads Qt from `~/QGroundControl/Qt`, so don't delete that folder.
 - To change the UI later: edit the QML in `~/QGroundControl/src`, then run `cmake --build ~/QGroundControl/build -j10` (incremental, takes a few minutes).
+
+## Step 12: Drone backup and diff (read-only)
+
+- Flight controller: Holybro Pixhawk 6C on `/dev/ttyACM0` (USB, 115200), sysid 1, ArduCopter. Confirmed **DISARMED**.
+- Tool: `~/QGroundControl/tools/param_sync.py` (pymavlink in `~/QGroundControl/.venv`).
+  - `backup` mode only reads.
+  - `apply` writes only the params named in `--only`, refuses if the vehicle is armed, and verifies each write by read-back.
+- Full backup of all 1030 drone params: `~/QGroundControl/param-backups/backup-backup-20261117-223826.param`.
+- **Finding:** the file differs from the drone in **48** params, not 3. It's an older or other snapshot, not the drone's current state.
+
+| Group | Params | Verdict |
+|---|---|---|
+| Sensor calibration | `INS_GYR*OFFS_*`, `INS_GYR*_CALTEMP`, `AHRS_TRIM_X/Y` | **Never write.** These would replace this board's current calibration and level trim with stale values (drift, hover tilt) |
+| RC calibration | `RC1–4_MIN/MAX/TRIM` | **Never write.** They would replace the measured stick ranges with generic 1000/2000. The throttle low point would be wrong, which affects arming and the throttle failsafe |
+| Learned hover throttle | `MOT_THST_HOVER` 0.479 → 0.246 | **Don't write.** It would halve the learned hover value, so altitude hold sags or surges until it relearns |
+| Serial port | `SERIAL5_PROTOCOL` 2 → -1 | **Don't write.** It would switch off a live MAVLink port (115200) the drone currently uses |
+| Battery failsafe | `BATT_FS_VOLTSRC` 1 → 0, `BATT_CRT_MAH` 675 → 0 | **Don't write.** These would switch from sag-compensated voltage to raw voltage and remove the mAh critical failsafe. Both weaken protection |
+| Safety fixes | `BATT_FS_LOW_ACT` 0 → 2, `BATT_ARM_VOLT` 13.6 → 14.8, `FENCE_ALT_MAX` 7 → 20 | **Write** |
+| Flight behaviour | `LOIT_SPEED_MS` 6 → 12.5, `LAND_ALT_LOW_M` 2 → 10, `LAND_SPD_HIGH_MS` 6 → 0 | Your choice. Loiter speed doubles; final landing descent starts higher |
+| Telemetry rates | `MAV1_*` → 0, `MAV3_*` → 2–4 Hz | Your choice. QGC requests its own rates anyway |
+| Declination | `COMPASS_DEC` → 0 | Harmless. `COMPASS_AUTODEC`=1 recomputes it from GPS |
+
+## Step 13: Write approved params (done 2026-11-17)
+
+You chose: safety fixes + flight behaviour. Telemetry rates, declination and **all calibration were left untouched**.
+
+```bash
+cd ~/QGroundControl
+.venv/bin/python -I tools/param_sync.py apply param_list_safe.param \
+  --only BATT_FS_LOW_ACT,BATT_ARM_VOLT,FENCE_ALT_MAX,LOIT_SPEED_MS,LAND_ALT_LOW_M,LAND_SPD_HIGH_MS
+```
+
+| Param | Before | After | Read-back |
+|---|---|---|---|
+| `BATT_ARM_VOLT` | 13.6 | 14.8 | OK |
+| `BATT_FS_LOW_ACT` | 0 | 2 (RTL) | OK |
+| `FENCE_ALT_MAX` | 7 | 20 | OK |
+| `LAND_ALT_LOW_M` | 2 | 10 | OK |
+| `LAND_SPD_HIGH_MS` | 6 | 0 (uses `WP_SPD_DN`) | OK |
+| `LOIT_SPEED_MS` | 6 | 12.5 | OK |
+
+- The script re-checked DISARMED right before writing. A second pre-write backup is at `param-backups/backup-apply-20261117-223928.param`.
+- No reboot was needed for these params. ArduPilot saves them as soon as they're set.
+- **Undo** (restores the exact pre-change values):
+  ```bash
+  .venv/bin/python -I tools/param_sync.py apply param-backups/backup-backup-20261117-223826.param \
+    --only BATT_FS_LOW_ACT,BATT_ARM_VOLT,FENCE_ALT_MAX,LOIT_SPEED_MS,LAND_ALT_LOW_M,LAND_SPD_HIGH_MS
+  ```
+- Before flying: you need a pack charged above **14.8 V** to arm. On the first flight, check that Loiter at 12.5 m/s feels controllable.
+
+## Pending
+
+- [ ] Optional: `sudo apt remove modemmanager`, so the flight controller's USB port is free immediately on plug-in
+- [ ] Later, for sharper flight response: set up the harmonic notch filter, then run AutoTune
+
+---
