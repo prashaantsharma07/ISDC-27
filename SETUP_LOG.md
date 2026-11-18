@@ -241,3 +241,22 @@ cd ~/QGroundControl
 - Note: close QGC before connecting — only one program can hold `/dev/ttyACM0`.
 
 ---
+
+## Step 15 — Rebrand + liquid-glass UI: TeamMARS-PID-tuner(DRONE) (2026-11-18)
+
+All work is on git branch `teammars-glass` in `~/MethodicConfigurator` (base: upstream tag `v5.1.1`). Details: `~/MethodicConfigurator/teammars/README.md`.
+
+1. **Name** → `TeamMARS-PID-tuner(DRONE)` in every window title, dialog text, About box, window class (`teamMARSPIDTuner`) and launcher. Original authors still credited in About (GPL requirement).
+2. **New theme** `frontend_tkinter_glass_theme.py` replaces the old grey `alt` theme everywhere (4 call sites):
+   - bottle green `#006A4E` glass buttons, caption chips, table headings, selected tab;
+   - bone `#E3DAC9` surface with rounded glass cards (white rim + top sheen);
+   - vermilion `#E34234` only as a hint: keyboard-focus rim, selected-tab underline, progress bars;
+   - frosted `#FBF8F2` fields and lists; hyperlinks bottle green.
+3. **Safety kept**: parameter field colours (default / below-limit / above-limit / calibration / read-only) keep their meaning; fields are not image-based so they always show.
+4. **Speed kept**: no blur or transparency — glass images are rendered once at start-up.
+5. **Backend untouched**: no change to MAVLink, uploads, parameter files or the configuration sequence.
+6. New icon `images/TeamMARS_icon.png` (glass tile with a PID step-response curve); launcher `teammars-pid-tuner.desktop` replaces the old one in the dock.
+7. Tests updated for the new name/icon; test suite run (screenshot-based GUI tests skipped: need `gnome-screenshot`).
+8. Undo (reversible): `cd ~/MethodicConfigurator && git stash -u` — bring back with `git stash pop`. Changes are not committed yet.
+
+---

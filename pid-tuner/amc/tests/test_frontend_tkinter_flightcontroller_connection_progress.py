@@ -82,13 +82,14 @@ class TestFlightControllerConnectionProgressBehavior:
         THEN: Should apply theme and center on screen
         """
         # Arrange: Mock dependencies
-        _, _, mock_style_instance = mock_tkinter_root
-
         # Act: Create connection progress
-        FlightControllerConnectionProgress()
+        with patch(
+            "ardupilot_methodic_configurator.frontend_tkinter_flightcontroller_connection_progress.apply_glass_theme"
+        ) as mock_apply_theme:
+            progress = FlightControllerConnectionProgress()
 
-        # Assert: Theme configured (centering is handled by ProgressWindow)
-        mock_style_instance.theme_use.assert_called_once_with("alt")
+        # Assert: TeamMARS glass theme applied to the temporary root (centering is handled by ProgressWindow)
+        mock_apply_theme.assert_called_once_with(progress.temp_root)
 
     def test_user_sees_initialization_progress_updates(self, mock_tkinter_root, mock_progress_window) -> None:
         """

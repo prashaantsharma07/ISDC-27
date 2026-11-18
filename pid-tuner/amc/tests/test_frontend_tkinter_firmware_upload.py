@@ -519,7 +519,7 @@ def test_accepted_official_upload_runs_successful_worker_and_enables_retry() -> 
     assert show_info.call_args.args[0] == firmware_upload._("Upload ArduPilot firmware")
     expected_status = firmware_upload._("Firmware upload completed and flight controller reconnected")
     expected_dialog = (
-        expected_status + "\n\n" + firmware_upload._("Close this window and restart AMC before continuing configuration.")
+        expected_status + "\n\n" + firmware_upload._("Close this window and restart TeamMARS-PID-tuner before continuing configuration.")
     )
     assert window.status.set.call_args.args == (expected_status,)
     assert show_info.call_args.args[1] == expected_dialog
@@ -779,7 +779,7 @@ def test_upload_result_selects_restart_or_return_to_amc(event: tuple, restart_re
         dialogs.showinfo.assert_called_once_with("Firmware upload cancelled", "cancelled", parent=window.root)
     else:
         dialog = dialogs.showinfo if event[0] == "done" else dialogs.showerror
-        assert "restart AMC" in dialog.call_args.args[1]
+        assert "restart TeamMARS-PID-tuner" in dialog.call_args.args[1]
 
 
 @pytest.mark.parametrize("first_result", [("done",), ("error", RuntimeError("upload failed"))])
@@ -1607,7 +1607,7 @@ def test_usb_removal_waits_for_window_close_before_exiting_amc(
         window.close()
 
     show_info.assert_called_once()
-    assert "AMC will close" in show_info.call_args.args[1]
+    assert "TeamMARS-PID-tuner will close" in show_info.call_args.args[1]
     assert not window.root.winfo_exists()
 
 

@@ -201,7 +201,10 @@ class MavlinkInspectorWindow(BaseWindow):  # pylint: disable=too-many-instance-a
         for widget, help_text in (
             (
                 self.main_frame,
-                _("Monitor messages reaching TeamMARS-PID-tuner through its active connection. Use Help for a step-by-step introduction."),
+                _(
+                    "Monitor messages reaching TeamMARS-PID-tuner through its active connection. "
+                    "Use Help for a step-by-step introduction."
+                ),
             ),
             (
                 self.status,

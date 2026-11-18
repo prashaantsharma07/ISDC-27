@@ -587,9 +587,9 @@ class FlightController:  # pylint: disable=too-many-public-methods,too-many-inst
         if recovery_error:
             logging_warning(_("Unable to reconnect after safe firmware-upload abort: %s"), recovery_error)
             if isinstance(error, FirmwareUploadCancelledError):
-                msg = _("Firmware upload was cancelled, but reconnection failed: {error}. Restart TeamMARS-PID-tuner to reconnect.").format(
-                    error=recovery_error
-                )
+                msg = _(
+                    "Firmware upload was cancelled, but reconnection failed: {error}. Restart TeamMARS-PID-tuner to reconnect."
+                ).format(error=recovery_error)
                 raise FirmwareConnectionError(msg) from error
             return
         if not isinstance(error, FirmwareUploadCancelledError):

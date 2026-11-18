@@ -672,7 +672,7 @@ class TestCompleteWorkflows:
 
         # Assert: Verify theme is applied for visual consistency
         style = ttk.Style()
-        assert style.theme_use() in ["alt", "clam", "default"]  # Valid themes
+        assert style.theme_use() in ["teammars_glass", "clam"]  # TeamMARS glass theme (clam = safe fallback)
 
     def test_user_can_launch_main_application_window(self) -> None:
         """
@@ -887,7 +887,7 @@ class TestThemeIntegration:
 
             # Assert: All should use the same theme for visual consistency
             assert len(set(themes)) == 1  # All themes should be identical
-            assert themes[0] == "alt"
+            assert themes[0] == "teammars_glass"
 
         finally:
             # Cleanup: Close all windows properly

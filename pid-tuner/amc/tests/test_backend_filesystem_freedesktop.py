@@ -127,7 +127,7 @@ class TestDesktopIconCreation:
             assert f"Icon={icon_path}" in result
             assert "[Desktop Entry]" in result
             assert "Version=1.0" in result
-            assert "Name=ArduPilot Methodic Configurator" in result
+            assert "Name=TeamMARS-PID-tuner(DRONE)" in result
             assert "Terminal=true" in result
 
     def test_user_can_create_desktop_entry_content_with_bash_fallback(self) -> None:

@@ -2604,7 +2604,7 @@ def test_cancel_recovery_reports_failure_without_reusing_parameters(
     reconnect = MagicMock(return_value=reconnect_error)
     failure_type = fw.FirmwareConnectionError if reconnect_error else fw.FirmwareIdentityError
 
-    with pytest.raises(failure_type, match="Restart AMC") as failure:
+    with pytest.raises(failure_type, match="Restart TeamMARS-PID-tuner") as failure:
         recovery_controller._recover_after_firmware_upload_abort(
             error,
             bootloader_entered=True,
@@ -2705,7 +2705,7 @@ def test_failed_cancellation_reconnect_is_a_failure_without_restoring_parameters
         patch(
             "ardupilot_methodic_configurator.backend_flightcontroller._BootloaderReconnector.__call__", return_value="no USB"
         ),
-        pytest.raises(fw.FirmwareConnectionError, match="Restart AMC") as error,
+        pytest.raises(fw.FirmwareConnectionError, match="Restart TeamMARS-PID-tuner") as error,
     ):
         controller.upload_apj_firmware(
             path,
@@ -2749,7 +2749,7 @@ def test_cancellation_does_not_restore_parameters_for_a_different_reconnected_bo
         patch(
             "ardupilot_methodic_configurator.backend_flightcontroller._BootloaderReconnector.__call__", side_effect=reconnect
         ),
-        pytest.raises(fw.FirmwareIdentityError, match="Restart AMC"),
+        pytest.raises(fw.FirmwareIdentityError, match="Restart TeamMARS-PID-tuner"),
     ):
         controller.upload_apj_firmware(
             path,

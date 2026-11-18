@@ -112,7 +112,7 @@ class TestDocumentationDisplayBehavior:
 
         # Check that links are styled as clickable
         blog_label = documentation_frame.documentation_labels[documentation_frame.BLOG_LABEL]
-        assert str(blog_label.cget("foreground")) == "blue"
+        assert str(blog_label.cget("foreground")) == "#00855F"
         assert str(blog_label.cget("cursor")) == "hand2"
 
     def test_user_sees_mandatory_level_progress_bar_with_correct_value(

@@ -218,7 +218,7 @@ class TestCompassCalibrationPopupInternals:  # pylint: disable=too-many-public-m
         style.configure.assert_any_call("Horizontal.TProgressbar", borderwidth=0, thickness=24)
         style.configure.assert_any_call(
             "Done.Horizontal.TProgressbar",
-            background="#8fbc8f",
+            background="#2E8B6E",  # TeamMARS BOTTLE_LIGHT
             borderwidth=0,
             thickness=24,
             troughcolor=style.lookup.return_value,

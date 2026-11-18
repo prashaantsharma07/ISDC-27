@@ -134,11 +134,11 @@ class TestApplicationResourcePaths:
 
         GIVEN: A user needs to display the application icon in the GUI
         WHEN: User requests the application icon filepath
-        THEN: The correct path to ArduPilot_icon.png should be returned
+        THEN: The correct path to TeamMARS_icon.png should be returned
         AND: The path should be properly constructed using importlib.resources
         """
         # Arrange: Mock the entire method to return expected path
-        expected_path = "/mock/path/images/ArduPilot_icon.png"
+        expected_path = "/mock/path/images/TeamMARS_icon.png"
         with patch.object(ProgramSettings, "application_icon_filepath", return_value=expected_path) as mock_method:
             # Act: Get application icon filepath
             result = ProgramSettings.application_icon_filepath()
@@ -173,13 +173,13 @@ class TestApplicationResourcePaths:
         GIVEN: A supported Python version with importlib.resources.files available
         WHEN: User requests the application icon filepath
         THEN: The path should be retrieved using importlib.resources
-        AND: The path should exist and end with ArduPilot_icon.png
+        AND: The path should exist and end with TeamMARS_icon.png
         """
         # Act: Get application icon filepath (uses importlib.resources)
         result = ProgramSettings.application_icon_filepath()
 
         # Assert: Path is valid and ends with expected filename
-        assert result.endswith("ArduPilot_icon.png")
+        assert result.endswith("TeamMARS_icon.png")
         assert "images" in result
         # Path should exist when running from source or installed package
         assert os_path.exists(result), f"Icon file should exist at {result}"

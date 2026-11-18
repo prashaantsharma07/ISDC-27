@@ -74,7 +74,7 @@ class FlightControllerInfoWindow(BaseWindow):
 
     def __init__(self, flight_controller: FlightController, vehicle_dir: Path) -> None:
         super().__init__()
-        self.root.title(_("TeamMARS-PID-tuner(DRONE) {version} - Flight Controller Info").format(version=__version__))  # Set the window title
+        self.root.title(_("TeamMARS-PID-tuner(DRONE) {version} - Flight Controller Info").format(version=__version__))
         self.root.geometry(self.calculate_scaled_geometry(500, 420))  # Adjust the window size as needed
         self.center_window_on_screen(self.root)
 
