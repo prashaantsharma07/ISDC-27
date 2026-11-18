@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=QGroundControl (stock)
+GenericName=Ground Control Station
+Comment=QGroundControl v5.1.5 Ground Control Station
+Icon=@HOME@/QGroundControl/QGroundControl.svg
+Exec=@HOME@/QGroundControl/QGroundControl-x86_64.AppImage
+Terminal=false
+Categories=Utility;
+Keywords=mavlink;drone;uav;ardupilot;pixhawk;gcs;
+StartupWMClass=QGroundControl-stock
