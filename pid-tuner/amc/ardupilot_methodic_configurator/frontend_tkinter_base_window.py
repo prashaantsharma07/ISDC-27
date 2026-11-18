@@ -208,6 +208,7 @@ class BaseWindow:
         self.default_font_size = get_safe_font_size()
         # Warning: on linux the font size might be negative
         style.configure("Bold.TLabel", font=("TkDefaultFont", self.default_font_size, "bold"))
+        style.configure("Caption.TLabel", font=("TkDefaultFont", self.default_font_size, "bold"))
 
         # Configure Entry and Combobox styles with explicit foreground colors
         # This prevents white-on-white text issues on Linux with dark themes

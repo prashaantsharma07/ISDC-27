@@ -103,7 +103,7 @@ class VehicleProjectCreatorWindow(BaseWindow):
         option1_label = ttk.Label(
             self.main_frame,
             text=_("New vehicle"),
-            style="Bold.TLabel",
+            style="Caption.TLabel",
         )
         option1_label_frame = ttk.LabelFrame(self.main_frame, labelwidget=option1_label)
         option1_label_frame.pack(expand=True, fill=tk.X, padx=6, pady=6)

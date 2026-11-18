@@ -347,6 +347,9 @@ def _create_theme(style: ttk.Style, root: tk.Misc) -> None:  # pylint: disable=t
         ],
     )
     style.configure("TLabelframe.Label", foreground=BONE_LIGHT, background=BONE, padding=(px(8), px(1)))
+    # captions passed to LabelFrame(labelwidget=...) get the same chip
+    style.layout("Caption.TLabel", style.layout("TLabelframe.Label"))
+    style.configure("Caption.TLabel", foreground=BONE_LIGHT, background=BONE, padding=(px(8), px(1)))
     style.configure("Optional.TLabelframe.Label", foreground=BONE)
     style.configure("Legend.TLabelframe.Label", foreground=BONE_LIGHT)
 
