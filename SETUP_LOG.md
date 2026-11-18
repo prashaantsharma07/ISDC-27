@@ -158,3 +158,14 @@ sed -e 's/^BATT_FS_LOW_ACT,.*/BATT_FS_LOW_ACT,2/' \
     -e 's/^FENCE_ALT_MAX,.*/FENCE_ALT_MAX,20/' \
     ~/Downloads/param_list_current.param > ~/QGroundControl/param_list_safe.param
 ```
+
+## Step 11: Build result and launchers
+
+- The build finished with 0 errors: `~/QGroundControl/build/Release/QGroundControl`.
+- First launch was clean, with no QML errors from the glass files (log: `custom-launch.log`).
+- QGC is single-instance, so close one copy before opening the other.
+- Launchers:
+  - **QGroundControl Glass** (`~/.local/share/applications/qgroundcontrol-glass.desktop`) runs the custom build and **is now pinned in the dock**.
+  - **QGroundControl (stock)** (`org.mavlink.qgroundcontrol.desktop`) is the original AppImage. It stays in the app menu as a fallback.
+- The custom build loads Qt from `~/QGroundControl/Qt`, so don't delete that folder.
+- To change the UI later: edit the QML in `~/QGroundControl/src`, then run `cmake --build ~/QGroundControl/build -j10` (incremental, takes a few minutes).
