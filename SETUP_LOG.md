@@ -293,3 +293,10 @@ Kept on purpose: all status/warning colours (green/yellow/orange/red, alerts, ma
 - Test: launched, MARS logo in toolbar and window, colours applied; not yet connected to the drone.
 
 ---
+
+## Step 18 — MARS logo on the PID tuner too (2026-11-18)
+
+- `ardupilot_methodic_configurator/images/TeamMARS_icon.png` replaced with the round MARS logo (old generated icon kept as `teammars/old_generated_icon.png`). Window icon and dock icon both use it.
+- AppImage rebuilt and `~/TeamMARS-share/` refreshed (new `.sha256`). Re-send this version to the team.
+
+---
