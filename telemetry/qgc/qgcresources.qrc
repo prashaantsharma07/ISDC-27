@@ -20,5 +20,7 @@
         <file alias="TrashDelete.svg">resources/TrashDelete.svg</file>
         <file alias="XDelete.svg">resources/XDelete.svg</file>
         <file alias="qgroundcontrol.ico">resources/icons/qgroundcontrol.ico</file>
+        <file alias="TeamMARSLogo.png">resources/TeamMARS/TeamMARSLogo.png</file>
+        <file alias="TeamMARSLogo_256.png">resources/TeamMARS/TeamMARSLogo_256.png</file>
     </qresource>
 </RCC>

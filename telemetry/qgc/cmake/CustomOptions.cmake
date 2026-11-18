@@ -189,7 +189,7 @@ endif()
 
 option(QGC_CREATE_APPIMAGE "Create AppImage package after build" ON)
 option(QGC_RUN_APPIMAGELINT "Run the appimagelint distro-compatibility check after AppImage creation" ${_qgc_appimagelint_default})
-set(QGC_APPIMAGE_ICON_256_PATH "${CMAKE_SOURCE_DIR}/deploy/linux/QGroundControl_256.png" CACHE FILEPATH "AppImage 256x256 icon path")
+set(QGC_APPIMAGE_ICON_256_PATH "${CMAKE_SOURCE_DIR}/resources/TeamMARS/TeamMARSLogo_256.png" CACHE FILEPATH "AppImage 256x256 icon path")
 set(QGC_APPIMAGE_ICON_SCALABLE_PATH "${CMAKE_SOURCE_DIR}/deploy/linux/QGroundControl.svg" CACHE FILEPATH "AppImage SVG icon path")
 set(QGC_APPIMAGE_APPRUN_PATH "${CMAKE_SOURCE_DIR}/deploy/linux/AppRun" CACHE FILEPATH "AppImage AppRun script path")
 set(QGC_APPIMAGE_DESKTOP_ENTRY_PATH "${CMAKE_SOURCE_DIR}/deploy/linux/org.mavlink.qgroundcontrol.desktop.in" CACHE FILEPATH "AppImage desktop entry path")

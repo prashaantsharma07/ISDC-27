@@ -15,6 +15,7 @@ Button {
     checkable:          false
 
     property bool logo: false
+    readonly property bool _rasterLogo: String(icon.source).toLowerCase().endsWith(".png")
 
     property real _horizontalMargin: ScreenTools.defaultFontPixelWidth
 
@@ -33,9 +34,21 @@ Button {
         // Logo buttons render the multi-color SVG natively via VectorImage; non-logo buttons
         // tint their monochrome icon through QGCColoredImage. Plain `Row` skips visible:false items.
         QGCVectorImage {
-            visible:                button.logo
+            visible:                button.logo && !button._rasterLogo
             height:                 ScreenTools.defaultFontPixelHeight * 2
             width:                  height
+            source:                 visible ? button.icon.source : ""
+            anchors.verticalCenter: parent.verticalCenter
+        }
+        // TeamMARS: raster (PNG) logos are drawn as a plain smooth image
+        Image {
+            visible:                button.logo && button._rasterLogo
+            height:                 ScreenTools.defaultFontPixelHeight * 2
+            width:                  height
+            sourceSize.height:      height * 2
+            fillMode:               Image.PreserveAspectFit
+            smooth:                 true
+            mipmap:                 true
             source:                 visible ? button.icon.source : ""
             anchors.verticalCenter: parent.verticalCenter
         }
