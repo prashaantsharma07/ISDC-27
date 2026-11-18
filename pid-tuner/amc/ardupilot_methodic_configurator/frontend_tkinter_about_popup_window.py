@@ -32,8 +32,10 @@ class AboutWindow(BaseWindow):
 
         # Add the "About" message
         about_message = _(
-            "ArduPilot Methodic Configurator Version: {version}\n\n"
-            "A clear configuration sequence for ArduPilot vehicles.\n\n"
+            "TeamMARS-PID-tuner(DRONE) Version: {version}\n\n"
+            "TeamMARS edition of ArduPilot Methodic Configurator:\n"
+            "a clear configuration and PID tuning sequence for ArduPilot vehicles.\n\n"
+            "Based on ArduPilot Methodic Configurator,\n"
             "Copyright © 2024-2026 Amilcar do Carmo Lucas and ArduPilot.org\n\n"
             "Licensed under the GNU General Public License v3.0"
         )

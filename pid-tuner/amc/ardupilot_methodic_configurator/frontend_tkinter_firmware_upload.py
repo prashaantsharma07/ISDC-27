@@ -643,7 +643,7 @@ class FirmwareUploadWindow(BaseWindow):  # pylint: disable=too-many-instance-att
             messagebox.showinfo(_("Firmware upload cancelled"), status, parent=self.root)
         else:
             self.restart_notified = True
-            status += "\n\n" + _("Close this window and restart AMC before continuing configuration.")
+            status += "\n\n" + _("Close this window and restart TeamMARS-PID-tuner before continuing configuration.")
             if error is None:
                 messagebox.showinfo(_("Upload ArduPilot firmware"), status, parent=self.root)
             else:
@@ -759,7 +759,7 @@ class FirmwareUploadWindow(BaseWindow):  # pylint: disable=too-many-instance-att
             # Connect or an idle unplug set the flag without telling the user, and closing now exits AMC.
             messagebox.showinfo(
                 _("Upload ArduPilot firmware"),
-                _("AMC will close now. Restart AMC to continue configuration."),
+                _("TeamMARS-PID-tuner will close now. Restart TeamMARS-PID-tuner to continue configuration."),
                 parent=self.root,
             )
         if self.owns_connection:

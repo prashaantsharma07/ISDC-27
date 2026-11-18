@@ -587,7 +587,7 @@ class FlightController:  # pylint: disable=too-many-public-methods,too-many-inst
         if recovery_error:
             logging_warning(_("Unable to reconnect after safe firmware-upload abort: %s"), recovery_error)
             if isinstance(error, FirmwareUploadCancelledError):
-                msg = _("Firmware upload was cancelled, but reconnection failed: {error}. Restart AMC to reconnect.").format(
+                msg = _("Firmware upload was cancelled, but reconnection failed: {error}. Restart TeamMARS-PID-tuner to reconnect.").format(
                     error=recovery_error
                 )
                 raise FirmwareConnectionError(msg) from error
@@ -597,7 +597,7 @@ class FlightController:  # pylint: disable=too-many-public-methods,too-many-inst
         # No erase occurred. The supplied reconnector is bound to the original
         # USB identity; the returned board ID must also match before reusing state.
         if self.info.apj_board_id != str(connected_board_id):
-            msg = _("The reconnected board does not match the controller before cancellation. Restart AMC.")
+            msg = _("The reconnected board does not match the controller before cancellation. Restart TeamMARS-PID-tuner.")
             raise FirmwareIdentityError(msg) from error
         self.fc_parameters.update(previous_parameters)
 

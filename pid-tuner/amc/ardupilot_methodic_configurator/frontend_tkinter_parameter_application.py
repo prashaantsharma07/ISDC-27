@@ -149,7 +149,7 @@ def run_standalone_parameter_application(  # pylint: disable=too-many-arguments
             return
 
         # Keep a small visible owner window while parameter data loads.
-        root = root_factory(className="ArduPilotMethodicConfigurator")
+        root = root_factory(className="TeamMARSPIDTuner")
         root.title(_("Preparing parameter data"))
         root.geometry("500x100")
         root.deiconify()

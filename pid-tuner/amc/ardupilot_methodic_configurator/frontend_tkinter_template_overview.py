@@ -119,7 +119,7 @@ class TemplateOverviewWindow(BaseWindow):  # pylint: disable=too-many-instance-a
 
     def _configure_window(self) -> None:
         """Configure the main window properties."""
-        title = _("Amilcar Lucas's - ArduPilot methodic configurator {version} - Template Overview and selection")
+        title = _("TeamMARS-PID-tuner(DRONE) {version} - Template Overview and selection")
         self.root.title(title.format(version=__version__))
 
         # Scale window geometry for HiDPI displays

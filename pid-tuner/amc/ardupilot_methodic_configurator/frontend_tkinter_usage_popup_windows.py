@@ -44,7 +44,7 @@ def display_workflow_explanation(parent: tk.Tk | None = None) -> BaseWindow | No
     instructions.insert(tk.END, _("This is not a ground control station and it has a different workflow:"))
     UsagePopupWindow.setup_window(
         popup_window,
-        _("ArduPilot Methodic Configurator - Workflow"),
+        _("TeamMARS-PID-tuner(DRONE) - Workflow"),
         "490x362",
         instructions,
     )
@@ -141,7 +141,7 @@ def confirm_component_properties(parent: tk.Tk) -> bool:
     confirmation_text.insert(
         tk.END,
         _(
-            "ArduPilot Methodic Configurator only operates correctly if all component properties are correct."
+            "TeamMARS-PID-tuner(DRONE) only operates correctly if all component properties are correct."
             " ArduPilot parameter values depend on the components used and their connections.\n\n"
             " Have you used the scrollbar on the right side of the window and "
             "entered the correct values for all components?"

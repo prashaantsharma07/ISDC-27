@@ -50,7 +50,7 @@ class VehicleProjectCreatorWindow(BaseWindow):
         super().__init__()
         self.project_manager = project_manager
         self.root.title(
-            _("Amilcar Lucas's - ArduPilot methodic configurator ")
+            _("TeamMARS-PID-tuner(DRONE) ")
             + __version__
             + _(" - Create a new vehicle project directory")
         )

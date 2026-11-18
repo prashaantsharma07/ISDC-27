@@ -416,7 +416,7 @@ class ParameterEditorWindow(BaseWindow):  # pylint: disable=too-many-instance-at
         self._requested_action = ParameterEditorAction.FINISHED
 
         self.root.title(
-            _("Amilcar Lucas's - ArduPilot methodic configurator ") + __version__ + _(" - Parameter file editor and uploader")
+            _("TeamMARS-PID-tuner(DRONE) ") + __version__ + _(" - Parameter file editor and uploader")
         )
         self.root.geometry(self.calculate_scaled_geometry(990, 630))  # Set the window width and height
         self.center_window_on_screen(self.root)

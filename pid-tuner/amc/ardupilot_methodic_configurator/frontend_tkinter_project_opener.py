@@ -53,7 +53,7 @@ class VehicleProjectOpenerWindow(BaseWindow):  # pylint: disable=too-many-instan
         super().__init__()
         self.project_manager = project_manager
         self.root.title(
-            _("Amilcar Lucas's - ArduPilot methodic configurator ")
+            _("TeamMARS-PID-tuner(DRONE) ")
             + __version__
             + _(" - Select vehicle configuration directory")
         )

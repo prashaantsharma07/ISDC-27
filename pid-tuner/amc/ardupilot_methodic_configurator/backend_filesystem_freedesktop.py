@@ -76,7 +76,7 @@ class FreeDesktop:
 
         return f"""[Desktop Entry]
 Version=1.0
-Name=ArduPilot Methodic Configurator
+Name=TeamMARS-PID-tuner(DRONE)
 Comment=A clear ArduPilot configuration sequence
 Exec={exec_cmd}
 Icon={icon_path}
@@ -84,7 +84,7 @@ Terminal=true
 Type=Application
 Categories=Development;
 Keywords=ardupilot;arducopter;drone;parameters;configuration;scm
-StartupWMClass=ArduPilotMethodicConfigurator
+StartupWMClass=teamMARSPIDTuner
 StartupNotify=true
 """
 

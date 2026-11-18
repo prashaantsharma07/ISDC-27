@@ -29,7 +29,7 @@ class FlightControllerConnectionProgress:
 
     def __init__(self) -> None:
         # Needed because ProgressWindow needs a master and there is no application root window at this point
-        self.temp_root: tk.Tk = tk.Tk(className="ArduPilotMethodicConfigurator")
+        self.temp_root: tk.Tk = tk.Tk(className="TeamMARSPIDTuner")
         self.temp_root.withdraw()  # Hide the temporary root window, we only want to show the progress window
 
         # Set the theme to 'alt'

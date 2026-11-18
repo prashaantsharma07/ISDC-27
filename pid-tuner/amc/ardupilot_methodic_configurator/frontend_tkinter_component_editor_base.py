@@ -237,7 +237,7 @@ class ComponentEditorWindowBase(BaseWindow):  # pylint: disable=too-many-instanc
     def _setup_window(self) -> None:
         """Setup the main window properties."""
         self.root.title(
-            _("Amilcar Lucas's - ArduPilot methodic configurator ") + self.version + _(" - Vehicle Component Editor")
+            _("TeamMARS-PID-tuner(DRONE) ") + self.version + _(" - Vehicle Component Editor")
         )
         self.root.geometry(self.calculate_scaled_geometry(WINDOW_WIDTH_PIX, 600))
         self.center_window_on_screen(self.root)

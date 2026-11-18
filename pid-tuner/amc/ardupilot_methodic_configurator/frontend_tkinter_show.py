@@ -436,7 +436,7 @@ def get_monitor_bounds(widget: tk.Misc) -> MonitorBounds:
 
 def _make_dialog_root() -> tk.Tk:
     """Create a hidden Tk root positioned on the last known monitor for dialog centering."""
-    root = tk.Tk(className="ArduPilotMethodicConfigurator")
+    root = tk.Tk(className="TeamMARSPIDTuner")
     ttk.Style().theme_use("alt")
     if _last_known_monitor_bounds is not None:
         b = _last_known_monitor_bounds

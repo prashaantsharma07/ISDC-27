@@ -29,7 +29,7 @@ class UpdateDialog(BaseWindow):  # pylint: disable=too-many-instance-attributes
     ) -> None:
         super().__init__()
         self.root.title(
-            _("Amilcar Lucas's - ArduPilot methodic configurator {version} - New version available").format(
+            _("TeamMARS-PID-tuner(DRONE) {version} - New version available").format(
                 version=__version__
             )
         )

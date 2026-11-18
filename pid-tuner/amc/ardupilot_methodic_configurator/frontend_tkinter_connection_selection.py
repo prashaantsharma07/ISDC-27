@@ -337,7 +337,7 @@ class ConnectionSelectionWindow(BaseWindow):
         show_skip_connection_option: bool = True,
     ) -> None:
         super().__init__()
-        self.root.title(_("AMC {version} - Flight controller connection").format(version=__version__))
+        self.root.title(_("TeamMARS-PID-tuner(DRONE) {version} - Flight controller connection").format(version=__version__))
         window_height = 380 if show_skip_connection_option else 253
         self.root.geometry(self.calculate_scaled_geometry(520, window_height))
         self.center_window_on_screen(self.root)

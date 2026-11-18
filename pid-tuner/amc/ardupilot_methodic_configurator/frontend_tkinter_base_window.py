@@ -119,7 +119,7 @@ class BaseWindow:
         if root_tk:
             self.root = tk.Toplevel(root_tk)
         else:
-            self.root = tk.Tk(className="ArduPilotMethodicConfigurator")
+            self.root = tk.Tk(className="TeamMARSPIDTuner")
             # Only set icon for main windows, and only outside test environments
             self._setup_application_icon()
             # Position on the last used monitor so successive sub-applications

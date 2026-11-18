@@ -243,7 +243,7 @@ class BatteryMonitorWindow(BaseWindow):  # pragma: no cover
     def __init__(self, model: BatteryMonitorDataModel) -> None:
         super().__init__()
         self.model = model  # Store model reference for tests
-        self.root.title(_("AMC Battery Monitor plugin test window"))
+        self.root.title(_("TeamMARS-PID-tuner Battery Monitor plugin test window"))
         width = 540
         height = 400
         self.root.geometry(self.calculate_scaled_geometry(width, height))
