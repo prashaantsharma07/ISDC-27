@@ -314,3 +314,18 @@ Kept on purpose: all status/warning colours (green/yellow/orange/red, alerts, ma
 - Works on Ubuntu 24.04+ (built on 24.04).
 
 ---
+
+## Step 20 — PID tuner dock icon fix (2026-11-18)
+
+GNOME caches launcher icons by file path, so overwriting `TeamMARS_icon.png` in place kept showing the old icon.
+The launcher now points to a new file, `~/TeamMARS-brand/teammars-pid-tuner-icon.png` (MARS logo), and was re-pinned.
+
+---
+
+## Step 21 — GitHub repository ISDC-27 (2026-11-18)
+
+- https://github.com/prashaantsharma07/ISDC-27 — one commit per step, in the order the work was done.
+- `telemetry/qgc/` and `pid-tuner/amc/` hold only the files we changed; the first commit for each adds the untouched
+  upstream files, so every later diff shows exactly what we changed. Build scripts re-apply them to a fresh upstream clone.
+- Downloads: GitHub Release with both AppImages and their `.sha256` files.
+- Commits use the GitHub no-reply e-mail; drone parameter backups stay on this PC.
