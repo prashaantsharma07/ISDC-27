@@ -225,3 +225,19 @@ cd ~/QGroundControl
 - [ ] Later, for sharper flight response: set up the harmonic notch filter, then run AutoTune
 
 ---
+
+## Step 14 — PID tuner: ArduPilot Methodic Configurator (2026-11-18)
+
+- Tried PIDscope 26.10.1 first, then **removed it** (it is a Betaflight blackbox analyser, not for ArduPilot). Deleted `~/PIDscope`, its launcher and its dock pin.
+- Chose **ArduPilot Methodic Configurator v5.1.1**: official ArduPilot project, GPL-3.0, pure Python, supports Pixhawk 6C / ArduCopter and walks through the full tuning sequence (notch filter → initial PIDs → AutoTune) with a backup at every step.
+- Installed **from source** so it can be modified:
+  ```bash
+  git clone --depth 1 --branch v5.1.1 https://github.com/ArduPilot/MethodicConfigurator.git ~/MethodicConfigurator
+  cd ~/MethodicConfigurator && python3 -m venv .venv && .venv/bin/pip install -e .
+  ```
+  Editable install: changes to `~/MethodicConfigurator/ardupilot_methodic_configurator/*.py` take effect on next launch, no rebuild.
+- Launcher `~/.local/share/applications/ardupilot-methodic-configurator.desktop` ("ArduPilot Tuner", `StartupWMClass=arduPilotMethodicConfigurator`), pinned to the dock after QGroundControl Glass.
+- Test launch OK (Workflow window opened). No parameters were read or written.
+- Note: close QGC before connecting — only one program can hold `/dev/ttyACM0`.
+
+---

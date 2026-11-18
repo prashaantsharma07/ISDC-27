@@ -1,0 +1,645 @@
+"""
+Base window implementation for the ArduPilot Methodic Configurator Tkinter frontend.
+
+This module provides the BaseWindow class, which serves as a foundation for all Tkinter-based
+windows in the application. It handles common functionality such as DPI scaling, theming,
+window management, and icon loading.
+
+Key Features:
+- Automatic DPI scaling detection and adjustment for HiDPI displays
+- Consistent theming across all application windows
+- Graceful icon loading with fallback for test environments
+- Utility methods for window positioning and image handling
+
+This file is part of ArduPilot Methodic Configurator. https://github.com/ArduPilot/MethodicConfigurator
+
+SPDX-FileCopyrightText: 2024-2026 Amilcar do Carmo Lucas <amilcar.lucas@iav.de>
+
+SPDX-License-Identifier: GPL-3.0-or-later
+"""
+
+# https://wiki.tcl-lang.org/page/Changing+Widget+Colors
+
+import contextlib
+import io
+import os
+import tkinter as tk
+from collections.abc import Callable
+from logging import debug as logging_debug
+from logging import error as logging_error
+from platform import system as platform_system
+from tkinter import messagebox, ttk
+
+from PIL import Image
+from screeninfo import get_monitors
+
+from ardupilot_methodic_configurator import _
+from ardupilot_methodic_configurator.backend_filesystem_program_settings import ProgramSettings
+from ardupilot_methodic_configurator.frontend_tkinter_font import get_safe_font_size
+from ardupilot_methodic_configurator.frontend_tkinter_navigation_lock import NavigationLock
+from ardupilot_methodic_configurator.frontend_tkinter_show import get_last_known_monitor_bounds, remember_monitor_bounds
+from ardupilot_methodic_configurator.macos_utilities import is_macos_sequoia_or_older
+
+
+def is_debugging() -> bool:
+    """Return True if a VS Code's debugger is attached."""
+    try:
+        # debug adapter used by VS Code Python debugger
+        import debugpy  # noqa: PLC0415,T100 # pylint: disable=import-outside-toplevel # pyright: ignore[reportMissingImports] # ty: ignore[unresolved-import]
+    except ImportError:
+        debugpy = None
+
+    is_connected = getattr(debugpy, "is_client_connected", None)
+    if not callable(is_connected):
+        return False
+
+    try:
+        return bool(is_connected())
+    except (TypeError, RuntimeError) as e:
+        logging_error(_("Error while checking debugpy connection: %s"), e)
+        return False
+
+
+def center_over_parent(window: tk.Toplevel | tk.Tk, parent: tk.Misc, width: int, height: int) -> None:
+    """Size `window` to `width`x`height` and center it over `parent`."""
+    parent_x = parent.winfo_rootx()
+    parent_y = parent.winfo_rooty()
+    parent_width = parent.winfo_width()
+    parent_height = parent.winfo_height()
+
+    x = parent_x + (parent_width // 2) - (width // 2)
+    y = parent_y + (parent_height // 2) - (height // 2)
+
+    window.geometry(f"{width}x{height}+{x}+{y}")
+
+
+class BaseWindow:
+    """
+    A foundational class for creating Tkinter windows in the ArduPilot Methodic Configurator.
+
+    This class provides common functionality for all application windows, including:
+    - DPI-aware scaling for HiDPI displays
+    - Consistent theming and styling
+    - Icon management with test environment fallbacks
+    - Window positioning utilities
+    - Image loading and display helpers
+
+    The class automatically detects whether it's running in a test environment and
+    adjusts behavior accordingly (e.g., skipping icon loading to avoid Tkinter issues).
+
+    Attributes:
+        root (Union[tk.Toplevel, tk.Tk]): The main Tkinter window object
+        dpi_scaling_factor (float): Detected DPI scaling factor for the display
+        main_frame (ttk.Frame): The primary container frame for window content
+
+    Example:
+        >>> # Create a main window
+        >>> window = BaseWindow()
+        >>>
+        >>> # Create a child window
+        >>> child = BaseWindow(window.root)
+
+    """
+
+    def __init__(self, root_tk: tk.Tk | tk.Toplevel | None = None) -> None:
+        """
+        Initialize a new BaseWindow instance.
+
+        Args:
+            root_tk (Optional[Union[tk.Tk, tk.Toplevel]]): Parent window. If None, creates a new root window.
+                                     If provided, creates a Toplevel window as a child.
+
+        Note:
+            When root_tk is None, this creates the main application window.
+            When root_tk is provided, this creates a child dialog or sub-window.
+
+        """
+        self.navigation_lock = NavigationLock()
+        self.root: tk.Toplevel | tk.Tk
+        if root_tk:
+            self.root = tk.Toplevel(root_tk)
+        else:
+            self.root = tk.Tk(className="ArduPilotMethodicConfigurator")
+            # Only set icon for main windows, and only outside test environments
+            self._setup_application_icon()
+            # Position on the last used monitor so successive sub-applications
+            # open on the same screen the user last worked on.
+            b = get_last_known_monitor_bounds()
+            if b is not None:
+                # Use a top-left offset to place it safely on the correct monitor,
+                # preventing the window from temporarily spawning in the bottom-right quadrant.
+                self.root.geometry(f"+{b.left + 100}+{b.top + 100}")
+
+            # Track the active monitor as the window moves so the next sub-application
+            # opens on the same screen. <Configure> fires while the window is alive
+            # (unlike <Destroy> which fires during teardown when widget state is unreliable).
+            # Child <Configure> events propagate to the toplevel bind tag but e.widget
+            # refers to the originating child, so the guard correctly filters them out.
+            self.root.bind(
+                "<Configure>",
+                lambda e: remember_monitor_bounds(self.root) if e.widget is self.root else None,
+            )
+
+        # Detect DPI scaling for HiDPI support
+        self.dpi_scaling_factor = self._get_dpi_scaling_factor()
+
+        self.default_font_size: int = 0
+
+        # Configure theme and styling
+        self._setup_theme_and_styling()
+
+        # Create main container frame
+        self.main_frame = ttk.Frame(self.root)
+        self.main_frame.pack(expand=True, fill=tk.BOTH)
+
+    def _setup_application_icon(self) -> None:
+        """
+        Set up the application icon for the main window.
+
+        This method handles icon loading with proper fallbacks for test environments
+        and error conditions. Icons are only loaded for main windows (not Toplevel windows)
+        and are skipped entirely during test runs to avoid Tkinter-related issues.
+
+        Note:
+            This method silently handles icon loading failures to prevent application
+            crashes due to missing icon files or Tkinter configuration issues.
+
+        """
+        # Skip icon loading during tests to avoid tkinter issues
+        if os.environ.get("PYTEST_CURRENT_TEST"):
+            return
+
+        if is_debugging():
+            return  # the vscode debugger can not cope with the application icon
+
+        # https://pythonassets.com/posts/window-icon-in-tk-tkinter/
+        try:
+            icon_path = ProgramSettings.application_icon_filepath()
+            self._icon_photo = tk.PhotoImage(master=self.root, file=icon_path)
+            self.root.iconphoto(True, self._icon_photo)  # noqa: FBT003
+        except (tk.TclError, FileNotFoundError) as e:
+            # Silently ignore icon loading errors (common in test environments)
+            logging_error(_("Could not load application icon: %s"), e)
+
+    def _setup_theme_and_styling(self) -> None:
+        """
+        Configure the TTK theme and create custom styles.
+
+        This method sets up the visual appearance of the application by:
+        - Selecting an appropriate TTK theme
+        - Creating custom styles for common UI elements
+        - Applying DPI-aware font sizing
+        - Ensuring readable text colors across platforms (especially Linux dark themes)
+
+        """
+        # Set the theme to 'alt' for consistent appearance
+        style = ttk.Style()
+        style.theme_use("alt")
+
+        # Create custom styles - use the system font size directly.
+        # Tk renders point-based fonts at the correct DPI size automatically;
+        # applying calculate_scaled_font_size here would double-scale on HiDPI displays.
+        self.default_font_size = get_safe_font_size()
+        # Warning: on linux the font size might be negative
+        style.configure("Bold.TLabel", font=("TkDefaultFont", self.default_font_size, "bold"))
+
+        # Configure Entry and Combobox styles with explicit foreground colors
+        # This prevents white-on-white text issues on Linux with dark themes
+        style.configure("default_v.TEntry", fieldbackground="light blue", foreground="black")
+        style.configure("below_limit.TEntry", fieldbackground="orangered", foreground="black")
+        style.configure("above_limit.TEntry", fieldbackground="red3", foreground="white")
+        style.map("readonly.TCombobox", fieldbackground=[("readonly", "white")])
+        style.map("readonly.TCombobox", selectbackground=[("readonly", "white")])
+        style.map("readonly.TCombobox", selectforeground=[("readonly", "black")])
+        style.map("default_v.TCombobox", fieldbackground=[("readonly", "light blue")])
+        style.map("default_v.TCombobox", selectbackground=[("readonly", "light blue")])
+        style.map("default_v.TCombobox", selectforeground=[("readonly", "black")])
+
+    @staticmethod
+    def _get_win32_system_dpi() -> int:
+        """
+        Query the real system DPI on Windows via Win32 API.
+
+        This bypasses DPI virtualization that affects ``winfo_fpixels`` and
+        ``tk scaling`` when the process is not declared DPI-aware.
+
+        Returns:
+            int: The system DPI (e.g. 96, 144, 192), or 0 if not on Windows or on failure.
+
+        """
+        try:
+            import ctypes  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
+
+            return int(ctypes.windll.user32.GetDpiForSystem())
+        except (AttributeError, OSError):
+            return 0
+
+    def _get_dpi_scaling_factor(self) -> float:
+        """
+        Detect the DPI scaling factor for HiDPI displays.
+
+        On Windows the Tk window is typically DPI-virtualized, meaning that
+        ``winfo_fpixels("1i")`` and ``tk scaling`` both report 96 DPI regardless
+        of the actual system DPI setting.  To work around this the method first
+        tries to read the real DPI from the Win32 API (``GetDpiForSystem``),
+        which is never virtualized.  On other platforms it falls back to the
+        Tkinter-based measurements.
+
+        Returns:
+            float: The scaling factor (1.0 for 100% / 96 DPI, 1.5 for 150%, etc.)
+
+        Note:
+            Falls back to 1.0 if all detection methods fail.
+
+        """
+        standard_dpi = 96.0
+
+        # --- Windows: query Win32 API directly (bypasses DPI virtualization) ---
+        if platform_system() == "Windows":
+            dpi = self._get_win32_system_dpi()
+            if dpi > 0:
+                return max(1.0, dpi / standard_dpi)
+
+        # --- Tk-based fallback (reliable on Linux/macOS) ---
+        try:
+            tk_dpi = self.root.winfo_fpixels("1i")  # pixels per inch
+            scaling_from_dpi = tk_dpi / standard_dpi
+
+            # tk scaling returns pixels/point (72 points/inch).
+            # Normalize to the 96 DPI baseline: at standard 96 DPI, tk scaling = 96/72 = 1.333.
+            # Multiply by (72/96) converts it to a Windows-style scale factor (1.0 at 100%).
+            tk_scaling = float(self.root.tk.call("tk", "scaling"))
+            scaling_from_tk = tk_scaling * 72.0 / standard_dpi
+
+            # Use the maximum of both normalized methods for robustness.
+            # The 1.0 floor prevents accidentally scaling windows *down* on platforms
+            # that report sub-96 DPI (e.g. macOS, which uses 72 pt/inch as its baseline).
+            return max(1.0, scaling_from_dpi, scaling_from_tk)
+        except (tk.TclError, AttributeError):
+            return 1.0
+
+    def calculate_scaled_font_size(self, base_size: int) -> int:
+        """
+        Calculate a DPI-aware font size.
+
+        Args:
+            base_size (int): The base font size in points
+
+        Returns:
+            int: The scaled font size appropriate for the current display
+
+        """
+        return int(base_size * self.dpi_scaling_factor)
+
+    def calculate_scaled_image_size(self, base_size: int) -> int:
+        """
+        Calculate a DPI-aware image size.
+
+        Args:
+            base_size (int): The base image size in pixels
+
+        Returns:
+            int: The scaled image size appropriate for the current display
+
+        """
+        return int(base_size * self.dpi_scaling_factor)
+
+    def calculate_scaled_padding(self, base_padding: int) -> int:
+        """
+        Calculate DPI-aware padding values.
+
+        Args:
+            base_padding (int): The base padding value in pixels
+
+        Returns:
+            int: The scaled padding value appropriate for the current display
+
+        """
+        return int(base_padding * self.dpi_scaling_factor)
+
+    def calculate_scaled_padding_tuple(self, padding1: int, padding2: int) -> tuple[int, int]:
+        """
+        Calculate a tuple of DPI-aware padding values.
+
+        Args:
+            padding1 (int): The first padding value in pixels
+            padding2 (int): The second padding value in pixels
+
+        Returns:
+            tuple[int, int]: A tuple of scaled padding values
+
+        """
+        return (self.calculate_scaled_padding(padding1), self.calculate_scaled_padding(padding2))
+
+    def calculate_scaled_geometry(self, width: int, height: int) -> str:
+        """
+        Calculate a DPI-aware geometry string for use with window.geometry().
+
+        Args:
+            width (int): The base window width in pixels
+            height (int): The base window height in pixels
+
+        Returns:
+            str: A geometry string 'WxH' with both dimensions scaled for the current display
+
+        """
+        logging_debug(
+            _("Calculated geometry for width %d and height %d with scaling factor %.2f"),
+            width,
+            height,
+            self.dpi_scaling_factor,
+        )
+        return f"{round(width * self.dpi_scaling_factor)}x{round(height * self.dpi_scaling_factor)}"
+
+    @staticmethod
+    def center_window(window: tk.Toplevel | tk.Tk, parent: tk.Toplevel | tk.Tk) -> None:
+        """
+        Center a window relative to its parent window.
+
+        This method calculates the appropriate position to center a child window
+        on top of its parent window, taking into account both windows' dimensions
+        and the parent's current position.
+
+        Args:
+            window (Union[tk.Toplevel, tk.Tk]): The window to center
+            parent (Union[tk.Toplevel, tk.Tk]): The parent window to center on
+
+        Note:
+            On macOS, positioning runs when Tk next processes idle tasks.
+
+        Example:
+            >>> main_window = BaseWindow()
+            >>> dialog = BaseWindow(main_window.root)
+            >>> BaseWindow.center_window(dialog.root, main_window.root)
+
+        """
+
+        def position() -> None:
+            parent_width = parent.winfo_width()
+            parent_height = parent.winfo_height()
+            window_width = window.winfo_width()
+            window_height = window.winfo_height()
+            if window_width <= 1:
+                window_width = window.winfo_reqwidth()
+            if window_height <= 1:
+                window_height = window.winfo_reqheight()
+            x = parent.winfo_x() + (parent_width // 2) - (window_width // 2)
+            y = parent.winfo_y() + (parent_height // 2) - (window_height // 2)
+            window.geometry(f"+{x}+{y}")
+
+        if is_macos_sequoia_or_older():
+            BaseWindow._run_when_idle(window, position)
+        else:
+            window.update_idletasks()
+            position()
+
+    @staticmethod
+    def center_window_on_screen(window: tk.Toplevel | tk.Tk) -> None:
+        """
+        Center a window on the screen where the mouse pointer is located.
+
+        This method handles multiple monitors by querying individual monitor geometry
+        and centering the window on the monitor containing the pointer.
+        Works cross-platform on Linux, Windows, and macOS.
+
+        Args:
+            window (Union[tk.Toplevel, tk.Tk]): The window to center on screen
+
+        Note:
+            On macOS, positioning runs when Tk next processes idle tasks.
+            Requires screeninfo library.
+
+        Example:
+            >>> progress_window = tk.Toplevel()
+            >>> BaseWindow.center_window_on_screen(progress_window)
+
+        """
+        if is_macos_sequoia_or_older():
+            BaseWindow._run_when_idle(window, lambda: BaseWindow._position_window_on_screen(window))
+        else:
+            window.update_idletasks()
+            BaseWindow._position_window_on_screen(window)
+
+    @staticmethod
+    def _run_when_idle(window: tk.Misc, callback: Callable[[], None]) -> None:
+        """Run deferred window work, cancelling it if the window is destroyed."""
+        timer_id: str | None = None
+        binding_id: str | None = None
+
+        def remove_binding() -> None:
+            if binding_id is None:
+                return
+            # Python < 3.11.8 and Python 3.12.0 clear all handlers even when unbind receives a callback ID.
+            with contextlib.suppress(tk.TclError):
+                scripts = window.bind("<Destroy>").splitlines()
+                remaining = "\n".join(line for line in scripts if not line.startswith(f'if {{"[{binding_id} ')).strip("\n")
+                window.bind("<Destroy>", remaining + "\n" if remaining else "")
+                window.deletecommand(binding_id)
+
+        def cancel_on_destroy(event: tk.Event) -> None:
+            if event.widget is window and timer_id is not None:
+                with contextlib.suppress(tk.TclError):
+                    window.after_cancel(timer_id)
+
+        def run() -> None:
+            nonlocal timer_id
+            timer_id = None
+            remove_binding()
+            with contextlib.suppress(tk.TclError):
+                if window.winfo_exists():
+                    callback()
+
+        with contextlib.suppress(tk.TclError):
+            binding_id = window.bind("<Destroy>", cancel_on_destroy, add="+")
+            timer_id = window.after_idle(run)
+
+    @staticmethod
+    def _position_window_on_screen(window: tk.Toplevel | tk.Tk) -> None:
+        """Position a window using its settled geometry without pumping Tk events."""
+        # Get the window dimensions
+        # Use winfo_width/height (actual rendered size) like center_window() does.
+        # Fall back to winfo_reqwidth/height for windows not yet mapped (returns 1).
+        window_width = window.winfo_width()
+        window_height = window.winfo_height()
+        if window_width <= 1:
+            window_width = window.winfo_reqwidth()
+        if window_height <= 1:
+            window_height = window.winfo_reqheight()
+
+        # Get pointer position to determine which monitor it's on
+        pointer_x = window.winfo_pointerx()
+        pointer_y = window.winfo_pointery()
+
+        # Try to get individual monitor geometry using screeninfo
+        try:
+            monitors = get_monitors()
+        except Exception:  # pylint: disable=broad-exception-caught
+            monitors = []  # screeninfo may fail on headless/Wayland/permission issues
+
+        # Find the monitor containing the pointer
+        target_monitor = None
+        for monitor in monitors:
+            if monitor.x <= pointer_x < monitor.x + monitor.width and monitor.y <= pointer_y < monitor.y + monitor.height:
+                target_monitor = monitor
+                break
+
+        # Fallback to primary monitor if pointer is not on any monitor
+        if target_monitor is None and monitors:
+            target_monitor = monitors[0]
+
+        if target_monitor:
+            # Center window on the target monitor
+            x = target_monitor.x + (target_monitor.width - window_width) // 2
+            y = target_monitor.y + (target_monitor.height - window_height) // 2
+
+            # Ensure window stays within monitor bounds
+            x = max(target_monitor.x, min(x, target_monitor.x + target_monitor.width - window_width))
+            y = max(target_monitor.y, min(y, target_monitor.y + target_monitor.height - window_height))
+        else:
+            # Fallback to simple screen centering if screeninfo fails
+            screen_width = window.winfo_screenwidth()
+            screen_height = window.winfo_screenheight()
+            x = (screen_width - window_width) // 2
+            y = (screen_height - window_height) // 2
+            x = max(0, x)
+            y = max(0, y)
+
+        # Set the position
+        window.geometry(f"+{x}+{y}")
+
+    def put_image_in_label(  # pylint: disable=too-many-locals
+        self,
+        parent: ttk.Frame,
+        filepath: str,
+        image_height: int = 40,
+        fallback_text: str | None = None,
+    ) -> ttk.Label:
+        """
+        Load an image and create a TTK label containing the resized image.
+
+        This method handles image loading with comprehensive error handling and fallback
+        behavior. It automatically scales images to the specified height while maintaining
+        aspect ratio, and provides graceful degradation when images cannot be loaded.
+
+        Args:
+            parent (ttk.Frame): The parent frame to contain the image label
+            filepath (str): Path to the image file to load
+            image_height (int, optional): Target height for the image in pixels.
+                                        Defaults to 40.
+            fallback_text (Optional[str], optional): Text to display if image loading
+                                                   fails. If None, creates an empty label.
+
+        Returns:
+            ttk.Label: A label widget containing either the loaded image or fallback content
+
+        Raises:
+            None: All exceptions are caught and handled gracefully with fallback behavior
+
+        Example:
+            >>> frame = ttk.Frame(root)
+            >>> logo_label = BaseWindow.put_image_in_label(
+            ...     frame,
+            ...     "assets/logo.png",
+            ...     image_height=60,
+            ...     fallback_text="Logo"
+            ... )
+
+        Note:
+            The returned label has an 'image' attribute set to prevent garbage collection
+            of the PhotoImage object. This is a Tkinter requirement for image persistence.
+
+        """
+        try:
+            # Validate input parameters
+            if not filepath:
+                msg = _("Image filepath cannot be empty")
+                raise ValueError(msg)
+
+            if image_height <= 0:
+                msg = _("Image height must be positive")
+                raise ValueError(msg)
+
+            # Check if file exists
+            if not os.path.isfile(filepath):
+                msg = _("Image file not found: %s") % filepath
+                raise FileNotFoundError(msg)
+
+            # Load and validate the image
+            with Image.open(filepath) as image:
+                if image is None:
+                    msg = _("Failed to load image from %s") % filepath
+                    raise ValueError(msg)
+
+                # Calculate new dimensions while preserving aspect ratio
+                width, height = image.size
+                if height == 0:
+                    msg = _("Image has zero height")
+                    raise ValueError(msg)
+                if width == 0:
+                    msg = _("Image has zero width")
+                    raise ValueError(msg)
+
+                aspect_ratio = width / height
+                dpi_scaled_height = int(image_height * self.dpi_scaling_factor)
+
+                # Ensure minimum dimensions to prevent resize errors
+                dpi_scaled_height = max(dpi_scaled_height, 1)
+
+                calculated_width = int(dpi_scaled_height * aspect_ratio)
+                calculated_width = max(calculated_width, 1)
+
+                # Resize the image
+                resized_image = image.resize((calculated_width, dpi_scaled_height), Image.Resampling.LANCZOS)
+
+                # Convert to PhotoImage for Tkinter using a buffer approach
+                buffer = io.BytesIO()
+                # Ensure the image is in a format that tk.PhotoImage can handle
+                if resized_image.mode not in ("RGB", "RGBA"):
+                    resized_image = resized_image.convert("RGB")
+
+                # Save as PNG to buffer
+                resized_image.save(buffer, format="PNG")
+                buffer.seek(0)
+
+                # Create PhotoImage from buffer
+                photo = tk.PhotoImage(master=parent, data=buffer.getvalue())
+
+            if is_debugging():
+                return ttk.Label(parent)  # the vscode debugger can not cope with the images
+
+            # Create the label with the image
+            image_label = ttk.Label(parent, image=photo)
+            # Keep a reference to prevent garbage collection
+            image_label.image = photo  # type: ignore[attr-defined]
+
+            return image_label
+
+        except FileNotFoundError:
+            # Re-raise FileNotFoundError to let calling code handle it
+            raise
+        except (OSError, ValueError, TypeError, AttributeError) as e:
+            # Log the error for debugging
+            logging_error(_("Error loading image from %s: %s"), filepath, e)
+
+            # Create fallback label
+            return ttk.Label(parent, text=fallback_text) if fallback_text else ttk.Label(parent)
+
+
+def show_info_popup(title: str, message: str) -> None:
+    messagebox.showinfo(title, message)
+
+
+def show_warning_popup(title: str, message: str) -> None:
+    messagebox.showwarning(title, message)
+
+
+def show_error_popup(title: str, message: str) -> None:
+    messagebox.showerror(title, message)
+
+
+def ask_yesno_popup(title: str, message: str) -> bool:
+    return messagebox.askyesno(title, message)
+
+
+def ask_retry_cancel_popup(title: str, message: str) -> bool:
+    return messagebox.askretrycancel(title, message)

@@ -1,0 +1,2549 @@
+#!/usr/bin/env python3
+
+"""
+Parameter editor GUI.
+
+This file is part of ArduPilot Methodic Configurator. https://github.com/ArduPilot/MethodicConfigurator
+
+SPDX-FileCopyrightText: 2024-2026 Amilcar do Carmo Lucas <amilcar.lucas@iav.de>
+
+SPDX-License-Identifier: GPL-3.0-or-later
+"""
+
+from __future__ import annotations
+
+import contextlib
+import re
+import tempfile
+import threading
+import tkinter as tk
+from argparse import ArgumentParser, Namespace
+from enum import Enum, auto
+from functools import partial, wraps
+
+# from logging import debug as logging_debug
+from logging import basicConfig as logging_basicConfig
+from logging import error as logging_error
+from logging import exception as logging_exception
+from logging import warning as logging_warning
+from sys import exit as sys_exit
+from sys import platform as sys_platform
+from tkinter import filedialog, simpledialog, ttk
+from typing import TYPE_CHECKING, Concatenate, Optional, ParamSpec, Protocol, TypeVar, Union, cast
+
+# from logging import critical as logging_critical
+from ardupilot_methodic_configurator import _, __version__
+from ardupilot_methodic_configurator.backend_bin_log import extract_log
+from ardupilot_methodic_configurator.backend_filesystem import LocalFilesystem
+from ardupilot_methodic_configurator.backend_filesystem_freedesktop import FreeDesktop
+from ardupilot_methodic_configurator.backend_filesystem_program_settings import ProgramSettings
+from ardupilot_methodic_configurator.backend_flightcontroller import FlightController
+from ardupilot_methodic_configurator.backend_flightcontroller_reconnect import FlightControllerReconnect
+from ardupilot_methodic_configurator.common_arguments import add_common_arguments
+from ardupilot_methodic_configurator.data_model_parameter_editor import (
+    ComponentEditorDeps,
+    ExperimentChoice,
+    LogAnalysisInputs,
+    ParameterEditor,
+)
+from ardupilot_methodic_configurator.data_model_transfer_progress import TransferDirection, TransferProgress
+from ardupilot_methodic_configurator.frontend_tkinter_about_popup_window import AboutWindow
+from ardupilot_methodic_configurator.frontend_tkinter_autoresize_combobox import AutoResizeCombobox
+from ardupilot_methodic_configurator.frontend_tkinter_base_window import (
+    BaseWindow,
+    ask_retry_cancel_popup,
+    ask_yesno_popup,
+    show_error_popup,
+    show_info_popup,
+    show_warning_popup,
+)
+from ardupilot_methodic_configurator.frontend_tkinter_component_editor import ComponentEditorWindow
+from ardupilot_methodic_configurator.frontend_tkinter_connection_recovery import ConnectionRecovery, RecoveryCallbacks
+from ardupilot_methodic_configurator.frontend_tkinter_directory_selection import VehicleDirectorySelectionWidgets
+from ardupilot_methodic_configurator.frontend_tkinter_fc_banner_window import FlightControllerBannerWindow
+from ardupilot_methodic_configurator.frontend_tkinter_file_browser import FileBrowserWindow
+from ardupilot_methodic_configurator.frontend_tkinter_file_browser_tasks import BackgroundTaskRunner
+from ardupilot_methodic_configurator.frontend_tkinter_font import get_safe_font_config
+from ardupilot_methodic_configurator.frontend_tkinter_log_availability import LogAvailabilityReportWindow
+from ardupilot_methodic_configurator.frontend_tkinter_mavlink_inspector import open_mavlink_inspector_window
+from ardupilot_methodic_configurator.frontend_tkinter_navigation_lock import NavigationLock
+from ardupilot_methodic_configurator.frontend_tkinter_parameter_compare_and_upload import ParameterFileUploadWindow
+from ardupilot_methodic_configurator.frontend_tkinter_parameter_editor_documentation_frame import DocumentationFrame
+from ardupilot_methodic_configurator.frontend_tkinter_parameter_editor_table import ParameterEditorTable
+from ardupilot_methodic_configurator.frontend_tkinter_parameter_export import ParameterExportWindow
+from ardupilot_methodic_configurator.frontend_tkinter_progress_window import (
+    ProgressWindow,
+    TkThreadCallbacks,
+    update_flight_controller_restart_progress,
+)
+from ardupilot_methodic_configurator.frontend_tkinter_rich_text import RichText, get_widget_font_family_and_size
+from ardupilot_methodic_configurator.frontend_tkinter_scroll_frame import ScrollFrame
+from ardupilot_methodic_configurator.frontend_tkinter_show import get_monitor_bounds, show_tooltip
+from ardupilot_methodic_configurator.frontend_tkinter_stage_progress import StageProgressBar
+from ardupilot_methodic_configurator.frontend_tkinter_usage_popup_window import UsagePopupWindow
+from ardupilot_methodic_configurator.frontend_tkinter_usage_popup_windows import (
+    display_parameter_editor_usage_popup,
+    only_upload_changed_parameters_usage_popup,
+)
+from ardupilot_methodic_configurator.log_analysis.backend_data_sources import load_apm_pdef
+from ardupilot_methodic_configurator.log_analysis.backend_log_analysis import analyze_log_data
+from ardupilot_methodic_configurator.log_analysis.data_model_log_analysis import LogSummary, validate_log_matches_vehicle
+from ardupilot_methodic_configurator.macos_utilities import is_macos_sequoia_or_older
+from ardupilot_methodic_configurator.plugins.plugin_factory import plugin_factory
+from ardupilot_methodic_configurator.plugins.plugin_protocol import PluginPauseReason, resolve_plugin_lifecycle
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from ardupilot_methodic_configurator.backend_flightcontroller_protocols import FileUploadResult
+    from ardupilot_methodic_configurator.data_model_file_upload import ProgressCallback, UploadTask
+    from ardupilot_methodic_configurator.data_model_par_dict import ParDict
+    from ardupilot_methodic_configurator.log_analysis.data_model_log_data import LogData
+    from ardupilot_methodic_configurator.log_analysis.utils import APMDoc
+    from ardupilot_methodic_configurator.plugins.plugin_protocol import PluginView
+
+# pylint: disable=too-many-lines
+
+
+class _PaneConfigurable(Protocol):  # pylint: disable=too-few-public-methods
+    """Subset of PanedWindow API needed for type-safe pane configuration."""
+
+    def paneconfigure(self, pane: tk.Widget, **kwargs: object) -> None: ...
+
+
+class ParameterEditorUiServices:  # pylint: disable=too-many-instance-attributes
+    """Container for UI dependencies injected into the parameter editor window."""
+
+    def __init__(  # noqa: PLR0913, PLR0917 # pylint: disable=too-many-arguments, too-many-positional-arguments
+        self,
+        create_progress_window: Callable[..., ProgressWindow],
+        ask_yesno: Callable[[str, str], bool],
+        ask_retry_cancel: Callable[[str, str], bool],
+        show_warning: Callable[[str, str], None],
+        show_error: Callable[[str, str], None],
+        show_info: Callable[[str, str], None],
+        asksaveasfilename: Callable[..., str],
+        askopenfilename: Callable[..., str],
+        exit_callback: Callable[[int], None],
+        extract_log_data: Callable[[str, Callable[[int, int], None] | None], LogData],
+        analyze_log_data_callback: Callable[..., LogSummary],
+        load_apm_doc: Callable[[str, str, str], APMDoc | None],
+        askdirectory: Callable[..., str] | None = None,
+        askstring: Callable[..., str | None] | None = None,
+    ) -> None:
+        self.create_progress_window = create_progress_window
+        self.ask_yesno = ask_yesno
+        self.ask_retry_cancel = ask_retry_cancel
+        self.show_warning = show_warning
+        self.show_error = show_error
+        self.show_info = show_info
+        self.asksaveasfilename = asksaveasfilename
+        self.askopenfilename = askopenfilename
+        self.askdirectory = askdirectory or filedialog.askdirectory
+        self.askstring = askstring or simpledialog.askstring
+        self.sys_exit = exit_callback
+        self.extract_log_data = extract_log_data
+        self.analyze_log_data = analyze_log_data_callback
+        self.load_apm_doc = load_apm_doc
+
+    @classmethod
+    def default(cls) -> ParameterEditorUiServices:
+        """Create UI services backed by the real Tkinter helpers."""
+
+        def _create_progress_window(
+            parent: tk.Misc,
+            title: str,
+            template: str,
+            only_show_when_update_called: bool = False,
+            auto_close_on_complete: bool = True,
+        ) -> ProgressWindow:
+            return ProgressWindow(
+                parent,
+                title,
+                template,
+                only_show_when_update_progress_called=only_show_when_update_called,
+                auto_close_on_complete=auto_close_on_complete,
+            )
+
+        def _load_apm_doc(vehicle_dir: str, vehicle_type: str, firmware_version: str) -> APMDoc | None:
+            temp_parent = vehicle_dir if isinstance(vehicle_dir, str) else None
+            with tempfile.TemporaryDirectory(dir=temp_parent) as temp_dir:
+                return load_apm_pdef(temp_dir, vehicle_type, firmware_version)
+
+        return cls(
+            create_progress_window=_create_progress_window,
+            ask_yesno=ask_yesno_popup,
+            ask_retry_cancel=ask_retry_cancel_popup,
+            show_warning=show_warning_popup,
+            show_error=show_error_popup,
+            show_info=show_info_popup,
+            asksaveasfilename=filedialog.asksaveasfilename,
+            askopenfilename=filedialog.askopenfilename,
+            exit_callback=sys_exit,
+            extract_log_data=extract_log,
+            analyze_log_data_callback=analyze_log_data,
+            load_apm_doc=_load_apm_doc,
+            askdirectory=filedialog.askdirectory,
+            askstring=simpledialog.askstring,
+        )
+
+    def upload_params_with_progress(
+        self,
+        parent_window: tk.Misc,
+        upload_callback: Callable[..., bool],
+        selected_params: dict,
+        *,
+        _ui_callbacks: TkThreadCallbacks | None = None,
+    ) -> bool:
+        """
+        Handle parameter upload with progress windows.
+
+        This method centralizes the common pattern of:
+        1. Creating reset and download progress window callbacks
+        2. Calling the upload workflow with all required callbacks
+        3. Cleaning up progress windows in a finally block
+
+        Args:
+            parent_window: The parent window for progress dialogs
+            upload_callback: The upload workflow function to call
+            selected_params: Dictionary of parameters to upload
+
+        """
+        callbacks = _ui_callbacks or TkThreadCallbacks()
+        if _ui_callbacks is None and is_macos_sequoia_or_older():
+            return callbacks.run(
+                parent_window,
+                lambda: self.upload_params_with_progress(
+                    parent_window, upload_callback, selected_params, _ui_callbacks=callbacks
+                ),
+            )
+        upload_progress_window: ProgressWindow | None = None
+        reset_reconnect_progress_window: ProgressWindow | None = None
+        download_progress_window: ProgressWindow | None = None
+
+        def get_upload_progress_callback() -> Callable[[int, int], None] | None:
+            """Create and return progress window callback for parameter upload only when needed."""
+            nonlocal upload_progress_window
+            show_only_on_update = True
+            upload_progress_window = callbacks.call(
+                self.create_progress_window,
+                parent_window,
+                _("Uploading FC parameters"),
+                _("Uploaded {} of {} parameters"),
+                show_only_on_update,
+            )
+            return callbacks.progress(upload_progress_window.update_progress_bar)
+
+        def get_connection_progress_callback() -> Callable[[int, int], None] | None:
+            """Create and return the shared reset/reconnect progress callback."""
+            nonlocal reset_reconnect_progress_window
+            if reset_reconnect_progress_window is None:
+                reset_reconnect_progress_window = callbacks.call(
+                    self.create_progress_window,
+                    parent_window,
+                    _("Restarting Flight Controller"),
+                    _("Reset command sent"),
+                    True,  # noqa: FBT003
+                    auto_close_on_complete=False,
+                )
+            progress_window = reset_reconnect_progress_window
+
+            def update_connection_progress(current: int, total: int) -> None:
+                update_flight_controller_restart_progress(progress_window, current, total)
+
+            return callbacks.progress(update_connection_progress)
+
+        def get_download_progress_callback() -> Callable[[int, int], None] | None:
+            """Create and return progress window callback for parameter download only when needed."""
+            nonlocal download_progress_window
+            show_immediately = False
+            download_progress_window = callbacks.call(
+                self.create_progress_window,
+                parent_window,
+                _("Re-downloading FC parameters"),
+                _("Downloaded {} of {} parameters"),
+                show_immediately,
+            )
+            return callbacks.progress(download_progress_window.update_progress_bar)
+
+        try:
+            return bool(
+                upload_callback(
+                    selected_params,
+                    ask_confirmation=callbacks.wrap(self.ask_yesno),
+                    ask_retry_cancel=callbacks.wrap(self.ask_retry_cancel),
+                    show_error=callbacks.wrap(self.show_error),
+                    get_upload_progress_callback=get_upload_progress_callback,
+                    get_connection_progress_callback=get_connection_progress_callback,
+                    get_download_progress_callback=get_download_progress_callback,
+                )
+            )
+        finally:
+            # Clean up progress windows if they were created
+            if upload_progress_window is not None:
+                callbacks.call(upload_progress_window.destroy)
+            if reset_reconnect_progress_window is not None:
+                callbacks.call(reset_reconnect_progress_window.destroy)
+            if download_progress_window is not None:
+                callbacks.call(download_progress_window.destroy)
+
+    def reset_all_parameters_to_default_with_progress(
+        self,
+        parent_window: tk.Misc,
+        reset_callback: Callable[..., bool],
+        *,
+        _ui_callbacks: TkThreadCallbacks | None = None,
+    ) -> bool:
+        """Run a parameter reset with shared restart and download progress windows."""
+        callbacks = _ui_callbacks or TkThreadCallbacks()
+        if _ui_callbacks is None and is_macos_sequoia_or_older():
+            return callbacks.run(
+                parent_window,
+                lambda: self.reset_all_parameters_to_default_with_progress(
+                    parent_window, reset_callback, _ui_callbacks=callbacks
+                ),
+            )
+        download_progress_window: ProgressWindow | None = None
+
+        def get_download_progress_callback() -> Callable[[int, int], None]:
+            nonlocal download_progress_window
+            download_progress_window = callbacks.call(
+                self.create_progress_window,
+                parent_window,
+                _("Re-downloading FC parameters"),
+                _("Downloaded {} of {} parameters"),
+                False,  # noqa: FBT003
+            )
+            return callbacks.progress(download_progress_window.update_progress_bar)
+
+        reset_progress_window = callbacks.call(
+            self.create_progress_window,
+            parent_window,
+            _("Restarting Flight Controller"),
+            _("Reset command sent"),
+            True,  # noqa: FBT003
+            auto_close_on_complete=False,
+        )
+
+        def update_progress(current: int, total: int) -> None:
+            update_flight_controller_restart_progress(reset_progress_window, current, total)
+
+        try:
+            return bool(
+                reset_callback(
+                    callbacks.wrap(self.show_error), callbacks.progress(update_progress), get_download_progress_callback
+                )
+            )
+        finally:
+            callbacks.call(reset_progress_window.destroy)
+            if download_progress_window is not None:
+                callbacks.call(download_progress_window.destroy)
+
+
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+
+
+def _with_fc_operation(
+    method: Callable[Concatenate[ParameterEditorWindow, _P], _R],
+) -> Callable[Concatenate[ParameterEditorWindow, _P], _R]:
+    """Retain an operation lease across nested Tk event loops."""
+
+    @wraps(method)
+    def guarded(self: ParameterEditorWindow, *method_args: _P.args, **kwargs: _P.kwargs) -> _R:
+        recovery = self._connection_recovery  # pylint: disable=protected-access
+        with recovery.operation() if recovery is not None else contextlib.nullcontext():
+            return method(self, *method_args, **kwargs)
+
+    return guarded
+
+
+class ParameterEditorAction(Enum):
+    """Describe the action requested when the parameter editor window closes."""
+
+    FINISHED = auto()
+    EDIT_COMPONENTS = auto()
+
+
+class ParameterEditorWindow(BaseWindow):  # pylint: disable=too-many-instance-attributes, too-many-public-methods
+    """
+    Parameter editor and upload graphical user interface (GUI) window.
+
+    It inherits from the BaseWindow class and displays documentation and edit widgets to
+    operate on drone parameters.
+    """
+
+    def __init__(
+        self,
+        parameter_editor: ParameterEditor,
+        ui_services: ParameterEditorUiServices | None = None,
+    ) -> None:
+        super().__init__()
+        self.parameter_editor = parameter_editor
+        self.ui = ui_services or ParameterEditorUiServices.default()
+        self._connection_recovery: ConnectionRecovery | None = None
+        self._connection_status: ttk.Label
+
+        self.file_selection_combobox: AutoResizeCombobox
+        self.show_only_differences: tk.BooleanVar
+        self.annotate_params_into_files: tk.BooleanVar
+        self.parameter_editor_table: ParameterEditorTable
+        self.skip_button: ttk.Button
+        self.gui_complexity = str(ProgramSettings.get_setting("gui_complexity"))
+        self.parameter_area_container: ttk.Frame
+        self.current_plugin: dict | None = None
+        self.current_plugin_view: PluginView | None = None
+        self.parameter_area_paned: tk.PanedWindow | None = None
+        self.parameter_container: ttk.Frame
+        self._tempcal_imu_progress_window: ProgressWindow | None = None
+        self.file_upload_progress_window: ProgressWindow | None = None
+        self._configured_upload_active = False
+        self._param_file_change_active = False
+        self._close_after_configured_upload = False
+        self._close_pending = False
+        self._param_download_progress_window: ProgressWindow | None = None
+        self._log_availability_report_window: LogAvailabilityReportWindow | None = None
+        self._log_analysis_running = False
+        self._file_browser_window: FileBrowserWindow | None = None
+        self._log_report_return_pending: bool = False
+        self.inline_component_editor: ComponentEditorWindow | None = None
+        self.inline_component_scroll_frame: ScrollFrame | None = None
+        self._inline_component_chrome_height = 0
+        self._parameter_area_resize_pending = False
+        self._parameter_area_resize_running = False
+        self._inline_component_name: str | None = None
+        self._updating_inline_editor: bool = False
+        self._requested_action = ParameterEditorAction.FINISHED
+
+        self.root.title(
+            _("Amilcar Lucas's - ArduPilot methodic configurator ") + __version__ + _(" - Parameter file editor and uploader")
+        )
+        self.root.geometry(self.calculate_scaled_geometry(990, 630))  # Set the window width and height
+        self.center_window_on_screen(self.root)
+
+        # Bind the close_connection_and_quit function to the window close event
+        self.root.protocol("WM_DELETE_WINDOW", self.close_connection_and_quit)
+
+        # Note: Entry and Combobox styles are configured in BaseWindow._setup_theme_and_styling()
+
+        self._create_conf_widgets(__version__)
+
+        self._create_progress_and_documentation_widgets()
+
+        # Placeholder frame for the optional inline component editor.
+        # It lives between the documentation frame and the parameter table.
+        # Content is populated/cleared by _update_inline_component_editor().
+        # Not packed initially; _update_inline_component_editor() will pack/unpack as needed.
+        self.inline_component_container = ttk.LabelFrame(self.main_frame)
+
+        self._create_parameter_area_widgets()
+
+        # Resize window height to ensure all widgets, including the skip button, are fully visible
+        # as some Linux Window managers like KDE, like to change font sizes and padding.
+        # So we need to dynamically accommodate for that after placing the widgets
+        self._fit_window_to_screen_height(initialize=True)
+        self._bind_parameter_layout_events()
+
+        # Set up startup notification for the main application window
+        FreeDesktop.setup_startup_notification(self.root)  # type: ignore[arg-type]
+
+        # trigger a table update to ask the user what to do in the case this file needs special actions
+        self.root.after(10, lambda: self.on_param_file_combobox_change(None, forced=True))
+
+        # this one should be on top of the previous one hence the longer time
+        if isinstance(self.root, tk.Tk) and UsagePopupWindow.should_display("parameter_editor"):
+            self.root.after(100, lambda: display_parameter_editor_usage_popup(cast("tk.Tk", self.root)))
+
+    def run(self) -> ParameterEditorAction:
+        """
+        Start the GUI main event loop.
+
+        This method should be called after instantiation to start the GUI.
+        Separated from __init__ to allow for testing and more flexible initialization.
+
+        Returns:
+            The action requested by the user when the event loop ends.
+
+        """
+        self._start_connection_monitor()
+        try:
+            self.root.mainloop()
+        finally:
+            self._stop_connection_monitor()
+        return self._requested_action
+
+    def _start_connection_monitor(self) -> None:
+        """Start one monitor for this editor, retaining the originally selected hardware UID."""
+        flight_controller = self.parameter_editor.flight_controller
+        if not isinstance(flight_controller.info.hw_unique_id, str) or not flight_controller.info.hw_unique_id:
+            return
+        self._connection_status = ttk.Label(self.main_frame)
+        show_tooltip(self._connection_status, _("Waiting for the original flight controller before resuming FC operations."))
+        self._connection_recovery = ConnectionRecovery(
+            self.root,
+            FlightControllerReconnect(flight_controller),
+            RecoveryCallbacks(
+                reader_busy=self._connection_reader_busy,
+                can_read=lambda: self.current_plugin_view is None,
+                pause_receiver=self._pause_connection_plugin,
+                lock_controls=self._lock_connection_plugin,
+                show_status=self._show_connection_status,
+                on_recovered=self._finish_connection_recovery,
+                can_refresh=lambda: not self.parameter_editor_table.bitmask_editor_open,
+            ),
+        )
+        self._connection_recovery.start()
+        self.root.bind("<Destroy>", self._on_connection_monitor_destroy, add="+")
+
+    def _on_connection_monitor_destroy(self, event: tk.Event) -> None:
+        if event.widget is self.root:
+            self._stop_connection_monitor()
+
+    def _stop_connection_monitor(self) -> bool:
+        """Cancel recovery, retaining ownership until the worker yields without blocking Tk."""
+        recovery = self._connection_recovery
+        if recovery is None:
+            return True
+        if not recovery.stop():
+            return False
+        self._connection_recovery = None
+        return True
+
+    def _connection_reader_busy(self) -> bool:
+        """Open sub-applications and nested editor operations retain exclusive reception."""
+        # Explicit operation leases are checked by ConnectionRecovery first.
+        # These checks retain protection for external and native Tk dialogs.
+        if self.navigation_lock.locked:
+            return True
+        if self._file_browser_window is not None:
+            return True
+        if self.parameter_editor_table.bitmask_editor_open:
+            return True
+        # Native Tk message boxes need not have a Python Toplevel wrapper.
+        return bool(self.root.tk.call("grab", "current", str(self.root)))
+
+    def _retain_fc_operation_until_closed(self, root: tk.Misc) -> None:
+        """Retain receive ownership for a tool whose window outlives its opening callback."""
+        recovery = self._connection_recovery
+        if recovery is None:
+            return
+        release = recovery.acquire_operation()
+
+        def on_destroy(event: tk.Event) -> None:
+            if event.widget is root:
+                release()
+
+        try:
+            root.bind("<Destroy>", on_destroy, add="+")
+        except Exception:
+            release()
+            raise
+
+    def _pause_connection_plugin(self) -> Callable[[], None] | None:
+        plugin = self.current_plugin_view
+        if plugin is None:
+            return self._pause_plugin_receiver(reason=PluginPauseReason.CONNECTION_RECOVERY)
+        if resolve_plugin_lifecycle(plugin, PluginPauseReason.CONNECTION_RECOVERY) is None:
+            return None
+        return self._pause_plugin_receiver(reason=PluginPauseReason.CONNECTION_RECOVERY)
+
+    def _lock_connection_plugin(self, owner: object) -> Callable[[], None]:
+        # Lifecycle hooks stop timers but need not disable plugin buttons.
+        # Keep user actions from entering the worker's connection too.
+        plugin_lock = NavigationLock()
+        widgets: list[object] = [self.current_plugin_view]
+        while widgets:
+            widget = widgets.pop()
+            if isinstance(widget, tk.Misc):
+                widgets.extend(widget.winfo_children())
+                if isinstance(widget, ttk.Widget):
+                    plugin_lock.register(widget)
+        plugin_lock.acquire(owner)
+        self.navigation_lock.acquire(owner)
+
+        def unlock() -> None:
+            plugin_lock.release(owner)
+            self.navigation_lock.release(owner)
+
+        return unlock
+
+    def _show_connection_status(self, message: str) -> None:
+        self._connection_status.configure(text=message)
+        self._connection_status.pack(side=tk.TOP, fill=tk.X, before=self.parameter_area_container)
+
+    def _finish_connection_recovery(self) -> None:
+        """Refresh FC cells on Tk without saving edits or advancing the configuration step."""
+        self._connection_status.pack_forget()
+        self._commit_focused_parameter_edit()
+        fc_parameters = self.parameter_editor.flight_controller.fc_parameters
+        for name, parameter in self.parameter_editor.current_step_parameters.items():
+            parameter.set_fc_value(fc_parameters.get(name))
+        # A component edit during recovery may have left only a connection placeholder.
+        if self.current_plugin is not None and self.current_plugin_view is None:
+            self._update_plugin_layout(self.current_plugin, force_reload=True)
+        options = self.parameter_editor_table.options
+        skip_when_no_differences = options.skip_when_no_differences
+        options.skip_when_no_differences = False
+        try:
+            self.repopulate_parameter_table()
+        finally:
+            options.skip_when_no_differences = skip_when_no_differences
+
+    def _create_progress_and_documentation_widgets(self) -> None:
+        """Create independently collapsible information sections above the table."""
+        last_step_nr = self.parameter_editor.get_last_configuration_step_number()
+        if last_step_nr is not None:
+            phases = self.parameter_editor.get_sorted_phases_with_end_and_weight(last_step_nr)
+            self.stage_progress_bar = StageProgressBar(self.main_frame, phases, last_step_nr, self.gui_complexity)
+            self.stage_progress_bar.pack(side=tk.TOP, fill="x", expand=False, pady=(2, 2), padx=(4, 4))
+
+        self.documentation_frame = DocumentationFrame(self.main_frame, self.parameter_editor)
+        self.documentation_frame.documentation_frame.pack(side=tk.TOP, fill="x", expand=False, pady=(2, 2), padx=(4, 4))
+
+    def _create_conf_widgets(self, version: str) -> None:  # pylint: disable=too-many-locals
+        config_frame = ttk.Frame(self.main_frame)
+        config_frame.pack(side=tk.TOP, fill="x", expand=False, pady=(4, 0))  # Pack the frame at the top of the window
+
+        config_subframe = ttk.Frame(config_frame)
+        config_subframe.pack(side=tk.LEFT, fill="x", expand=True, anchor=tk.NW)  # Pack the frame at the top of the window
+
+        # Create a new frame inside the config_subframe for the intermediate parameter file directory selection labels
+        # and directory selection button
+        directory_selection_frame = VehicleDirectorySelectionWidgets(
+            self,
+            config_subframe,
+            self.parameter_editor.get_vehicle_directory(),
+            destroy_parent_on_open=False,
+        )
+        if self.gui_complexity != "simple":
+            directory_selection_frame.container_frame.pack(side=tk.LEFT, fill="x", expand=False, padx=(4, 6))
+
+        # Create a new frame inside the config_subframe for the intermediate parameter file selection label and combobox
+        file_selection_frame = ttk.Frame(config_subframe)
+        if self.gui_complexity != "simple":
+            file_selection_frame.pack(side=tk.LEFT, fill="x", expand=False, padx=(6, 6))
+
+        # Create a label for the Combobox
+        file_selection_label = ttk.Label(file_selection_frame, text=_("Current intermediate parameter file:"))
+        if self.gui_complexity != "simple":
+            file_selection_label.pack(side=tk.TOP, anchor=tk.NW)  # Add the label to the top of the file_selection_frame
+
+        # Create Combobox for intermediate parameter file selection
+        self.file_selection_combobox = AutoResizeCombobox(
+            file_selection_frame,
+            self.parameter_editor.parameter_files(),
+            self.parameter_editor.current_file,
+            _(
+                "Select the intermediate parameter file from the list of available"
+                " files in the selected vehicle directory\nIt will automatically "
+                "advance to the next file once the current file is uploaded to the "
+                "fight controller"
+            ),
+            state="readonly",
+            width=45,
+            style="readonly.TCombobox",
+        )
+        self.file_selection_combobox.bind("<<ComboboxSelected>>", self.on_param_file_combobox_change)
+        self.navigation_lock.register(self.file_selection_combobox)
+        if self.gui_complexity != "simple":  # only display the combobox when not simple
+            self.file_selection_combobox.pack(side=tk.TOP, anchor=tk.NW, pady=(4, 0))
+
+        self.legend_frame(config_subframe)
+
+        parameter_actions_frame = ttk.Frame(config_subframe)
+        parameter_actions_frame.pack(side=tk.LEFT, anchor=tk.NW)
+        font_family, font_size = get_widget_font_family_and_size(parameter_actions_frame)
+        smaller_button_font = (font_family, font_size - 1 if font_size > 0 else font_size + 1)
+        smaller_button_style = "SmallParameterAction.TButton"
+        ttk.Style().configure(smaller_button_style, font=smaller_button_font, padding=(4, -1))
+
+        compare_and_upload_button = ttk.Button(
+            parameter_actions_frame,
+            text=_("Compare and upload"),
+            command=self.on_compare_and_upload_parameter_file_click,
+            style=smaller_button_style,
+        )
+        compare_and_upload_button.configure(state="normal" if self.parameter_editor.is_fc_connected else "disabled")
+        self.navigation_lock.register(compare_and_upload_button)
+        compare_and_upload_button.grid(row=0, column=0, padx=(8, 8), sticky=tk.EW)
+        show_tooltip(
+            compare_and_upload_button,
+            _("Select a .parm or .param file to compare with the FC and optionally upload")
+            if self.parameter_editor.is_fc_connected
+            else _("No flight controller connected, external parameter upload not available"),
+        )
+
+        export_parameters_button = ttk.Button(
+            parameter_actions_frame,
+            text=_("Export parameters"),
+            command=self.on_export_parameters_click,
+            style=smaller_button_style,
+        )
+        export_parameters_button.configure(state="normal" if self.parameter_editor.is_fc_connected else "disabled")
+        self.navigation_lock.register(export_parameters_button)
+        export_parameters_button.grid(row=1, column=0, padx=(8, 8), pady=(3, 0), sticky=tk.EW)
+        show_tooltip(
+            export_parameters_button,
+            _("Select parameter categories and export the current FC values")
+            if self.parameter_editor.is_fc_connected
+            else _("No flight controller connected, parameter export not available"),
+        )
+
+        fc_banner_button = ttk.Button(
+            parameter_actions_frame,
+            text=_("FC banner"),
+            command=self.on_fc_banner_click,
+            style=smaller_button_style,
+        )
+        fc_banner_button.configure(state="normal" if self.parameter_editor.is_fc_connected else "disabled")
+        self.navigation_lock.register(fc_banner_button)
+        fc_banner_button.grid(row=2, column=0, padx=(8, 8), pady=(3, 0), sticky=tk.EW)
+        show_tooltip(
+            fc_banner_button,
+            _("Display the latest flight-controller banner"),
+        )
+
+        analyse_log_button = ttk.Button(
+            parameter_actions_frame,
+            text=_("Analyse a .bin log"),
+            command=self.on_analyse_log_click,
+            style=smaller_button_style,
+        )
+        analyse_log_button.grid(row=3, column=0, padx=(8, 8), pady=(3, 0), sticky=tk.EW)
+        self.navigation_lock.register(analyse_log_button)
+        show_tooltip(analyse_log_button, _("Open a .bin flight log and analyse its availability"))
+
+        edit_vehicle_components_button = ttk.Button(
+            parameter_actions_frame,
+            text=_("Edit vehicle components"),
+            command=self.on_edit_vehicle_components_click,
+            style=smaller_button_style,
+        )
+        edit_vehicle_components_button.grid(row=4, column=0, padx=(8, 8), pady=(3, 0), sticky=tk.EW)
+        self.navigation_lock.register(edit_vehicle_components_button)
+        show_tooltip(
+            edit_vehicle_components_button,
+            _("Close the parameter editor and open the vehicle component editor"),
+        )
+
+        self._create_logo_and_forum_help_widgets(config_frame, version, smaller_button_style)
+
+    def _create_logo_and_forum_help_widgets(self, parent: ttk.Frame, version: str, button_style: str) -> None:
+        """Create the ArduPilot logo and forum-help zip button in the configuration header."""
+        logo_and_forum_frame = ttk.Frame(parent)
+        logo_and_forum_frame.pack(side=tk.RIGHT, anchor=tk.NE, padx=(4, 4), pady=(4, 0))
+        image_label = self.put_image_in_label(logo_and_forum_frame, LocalFilesystem.application_logo_filepath())
+        image_label.pack(side=tk.TOP, anchor=tk.NE)
+        image_label.bind("<Button-1>", lambda event: AboutWindow(self.root, version))  # noqa: ARG005
+        show_tooltip(image_label, _("User Manual, Support Forum, Report a Bug, Licenses, Source Code"))
+
+        zip_vehicle_for_forum_button = ttk.Button(
+            logo_and_forum_frame,
+            text=_("Zip vehicle for Forum help"),
+            command=self.on_zip_vehicle_for_forum_help_click,
+            style=button_style,
+        )
+        zip_vehicle_for_forum_button.configure(state=("normal" if self.parameter_editor.parameter_files() else "disabled"))
+        self.navigation_lock.register(zip_vehicle_for_forum_button)
+        zip_vehicle_for_forum_button.pack(side=tk.TOP, fill="x", pady=(3, 0))
+        show_tooltip(
+            zip_vehicle_for_forum_button,
+            _("Creates a .zip file of the configuration files\nso that they can be easily shared for forum help")
+            if self.parameter_editor.parameter_files()
+            else _("No intermediate parameter files available"),
+        )
+
+        inspector_button = ttk.Button(
+            logo_and_forum_frame,
+            text=_("MAVLink inspector"),
+            command=self.on_mavlink_inspector_click,
+            style=button_style,
+        )
+        inspector_button.configure(state="normal" if self.parameter_editor.is_fc_link_connected else "disabled")
+        self.navigation_lock.register(inspector_button)
+        inspector_button.pack(side=tk.TOP, fill="x", pady=(3, 0))
+        show_tooltip(inspector_button, _("Inspect received MAVLink messages, datarates and decoded fields."))
+
+    def legend_frame(self, config_subframe: ttk.Frame) -> None:  # pylint: disable=too-many-locals
+        font_family, font_size = get_widget_font_family_and_size(config_subframe)
+        style = ttk.Style()
+        style.configure("Legend.TLabelframe", font=(font_family, font_size))
+        legend_frame = ttk.LabelFrame(config_subframe, text=_("Legend"), style="Legend.TLabelframe")
+        legend_left = ttk.Frame(legend_frame)
+        legend_left.pack(side=tk.LEFT, anchor=tk.NW)
+        show_tooltip(legend_frame, _("the meaning of the text background colors"), position_below=False)
+
+        font = (font_family, font_size - 1 if font_size > 0 else font_size + 1)
+        np_label = ttk.Label(legend_left, text=_("Normal parameter"), font=font)
+        show_tooltip(np_label, _("Normal parameter - reusable in similar vehicles"))
+        np_label.pack(side=tk.TOP, anchor=tk.NW)
+        cal_label = ttk.Label(legend_left, text=_("Calibration param"), background="yellow", font=font)
+        show_tooltip(cal_label, _("Calibration parameter - not-reusable, even in similar vehicles"))
+        cal_label.pack(side=tk.TOP, anchor=tk.NW)
+        readonly_label = ttk.Label(legend_left, text=_("Read-only param"), background="purple1", font=font)
+        show_tooltip(readonly_label, _("Read-only parameter - not writable nor changeable"))
+        readonly_label.pack(side=tk.TOP, anchor=tk.NW)
+        toolow_label = ttk.Label(legend_left, text=_("Below limit"), background="orangered", font=font)
+        show_tooltip(toolow_label, _("Parameter value below the minimum recommended value"))
+        toolow_label.pack(side=tk.TOP, anchor=tk.NW)
+        legend_right = ttk.Frame(legend_frame)
+        legend_right.pack(side=tk.RIGHT, anchor=tk.NE)
+        default_label = ttk.Label(legend_right, text=_("Default value"), background="lightblue", font=font)
+        show_tooltip(default_label, _("This is the default value of this parameter"))
+        default_label.pack(side=tk.TOP, anchor=tk.NW)
+        na_label = ttk.Label(legend_right, text=_("Not available"), background="orange", font=font)
+        show_tooltip(na_label, _("This parameter is not available on the connected flight controller"))
+        na_label.pack(side=tk.TOP, anchor=tk.NW)
+        ne_label = ttk.Label(legend_right, text=_("Not editable"), font=font)
+        show_tooltip(
+            ne_label,
+            _(
+                "This value has been automatically calculated by the software using data\n"
+                "from the component editor window or from the 'configuration_steps.json' file"
+            ),
+        )
+        ne_label.configure(state="disabled")
+        ne_label.pack(side=tk.TOP, anchor=tk.NW)
+        toohigh_label = ttk.Label(legend_right, text=_("Above limit"), background="red3", font=font)
+        show_tooltip(toohigh_label, _("Parameter value above the maximum recommended value"))
+        toohigh_label.pack(side=tk.TOP, anchor=tk.NW)
+        legend_frame.pack(side=tk.LEFT, fill="x", expand=False, padx=(2, 2))
+
+    def _create_parameter_area_widgets(self) -> None:
+        self.show_only_differences = tk.BooleanVar(value=False)
+        self.annotate_params_into_files = tk.BooleanVar(
+            value=bool(ProgramSettings.get_setting("annotate_docs_into_param_files"))
+        )
+
+        # Container allows hot-swapping between plugin and non-plugin layouts
+        # without destroying the parent main_frame structure. This enables dynamic
+        # UI reconfiguration when switching between parameter files with different plugin requirements.
+        self.parameter_area_container = ttk.Frame(self.main_frame)
+        self.parameter_area_container.pack(side="top", fill="both", expand=True)
+
+        # Track current plugin state to enable efficient layout switching and lifecycle management
+        self.current_plugin = None
+        self.parameter_container = self.parameter_area_container
+
+        # Create the scrollable parameter editor table in the container
+        self.parameter_editor_table = ParameterEditorTable(self.parameter_container, self.parameter_editor, self)
+        # Table will be populated by the scheduled on_param_file_combobox_change callback
+        self.parameter_editor_table.pack(side="top", fill="both", expand=True)
+
+        # Create a frame for the buttons
+        buttons_frame = ttk.Frame(self.main_frame)
+        buttons_frame.pack(side="bottom", fill="x", expand=False, pady=(10, 10))
+
+        # Create a frame for the checkboxes
+        checkboxes_frame = ttk.Frame(buttons_frame)
+        checkboxes_frame.pack(side=tk.LEFT, padx=(8, 8))
+
+        # Create a checkbox for toggling parameter display
+        only_changed_checkbox = ttk.Checkbutton(
+            checkboxes_frame,
+            text=_("See only changed parameters"),
+            variable=self.show_only_differences,
+            command=self.on_show_only_changed_checkbox_change,
+        )
+        if self.gui_complexity != "simple":
+            only_changed_checkbox.pack(side=tk.TOP, anchor=tk.NW)
+            show_tooltip(
+                only_changed_checkbox,
+                _("Toggle to show only parameters that will change if/when uploaded to the flight controller"),
+            )
+
+        annotate_params_checkbox = ttk.Checkbutton(
+            checkboxes_frame,
+            text=_("Annotate docs into .param files"),
+            state="normal" if self.parameter_editor.parameter_documentation_available() else "disabled",
+            variable=self.annotate_params_into_files,
+            command=lambda: ProgramSettings.set_setting(
+                "annotate_docs_into_param_files", self.annotate_params_into_files.get()
+            ),
+        )
+        if self.gui_complexity != "simple":
+            annotate_params_checkbox.pack(side=tk.TOP, anchor=tk.NW)
+            show_tooltip(
+                annotate_params_checkbox,
+                _(
+                    "Annotate ArduPilot parameter documentation metadata into the intermediate parameter files\n"
+                    "The files will be bigger, but all the existing parameter documentation will be included inside"
+                ),
+            )
+
+        # Create upload button
+        upload_selected_and_stay_button = ttk.Button(
+            buttons_frame,
+            text=_("Upload selected params to FC"),
+            command=self.on_upload_selected_and_stay_click,
+        )
+        upload_selected_and_stay_button.configure(state="normal" if self.parameter_editor.is_fc_connected else "disabled")
+        self.navigation_lock.register(upload_selected_and_stay_button)
+        upload_selected_and_stay_button.pack(side=tk.LEFT, padx=(8, 8))
+        show_tooltip(
+            upload_selected_and_stay_button,
+            _(
+                "Upload selected parameters to the flight controller and stay on the current step\n"
+                "If changes have been made to the current file it will ask if you want to save them\n"
+                "It will reset the FC if necessary, re-download all parameters and validate their value"
+            )
+            if self.parameter_editor.is_fc_connected
+            else _("No flight controller connected, upload not available"),
+        )
+
+        # Create upload and advance button
+        upload_selected_button = ttk.Button(
+            buttons_frame,
+            text=_("Upload selected params to FC,\nand advance to next param file"),
+            command=self.on_upload_selected_click,
+        )
+        upload_selected_button.configure(state="normal" if self.parameter_editor.is_fc_connected else "disabled")
+        self.navigation_lock.register(upload_selected_button)
+        upload_selected_button.pack(side=tk.LEFT, padx=(8, 8))  # Add padding on both sides of the upload selected button
+        show_tooltip(
+            upload_selected_button,
+            _(
+                "Upload selected parameters to the flight controller and advance to the next "
+                "intermediate parameter file\nIf changes have been made to the current file it will ask if you want "
+                "to save them\nIt will reset the FC if necessary, re-download all parameters and validate their value"
+            )
+            if self.parameter_editor.is_fc_connected
+            else _("No flight controller connected, upload not available"),
+        )
+
+        # Create download .bin log files button
+        download_log_button = ttk.Button(
+            buttons_frame,
+            text=_("Download .bin\nlog file(s)"),
+            command=self.on_download_bin_logs_click,
+        )
+        download_log_button.configure(
+            state=(
+                "normal"
+                if (self.parameter_editor.is_fc_connected and self.parameter_editor.is_mavftp_supported)
+                else "disabled"
+            )
+        )
+        download_log_button.pack(side=tk.LEFT, padx=(8, 8))  # Add padding on both sides of the download log button
+        self.navigation_lock.register(download_log_button)
+        show_tooltip(
+            download_log_button,
+            _("Browse files in the flight controller log directory and download one or more files")
+            if (self.parameter_editor.is_fc_connected and self.parameter_editor.is_mavftp_supported)
+            else _("No flight controller connected or MAVFTP not supported"),
+        )
+        # Create skip buttons
+        self.skip_button = ttk.Button(buttons_frame, text=_("Skip >"), command=self.on_skip_click)
+        self.skip_button.configure(
+            state=(
+                "normal"
+                if self.gui_complexity != "simple"
+                or self.parameter_editor.is_configuration_step_optional()
+                or not self.parameter_editor.is_fc_connected
+                else "disabled"
+            )
+        )
+        self.skip_button.pack(side=tk.RIGHT, padx=(8, 8))  # Add right padding to the skip button
+        self.navigation_lock.register(self.skip_button)
+        show_tooltip(
+            self.skip_button,
+            _(
+                "Go to the next configuration step parameter file without uploading any changes to the flight "
+                "controller\nIf changes have been made to the current file it will ask if you want to save them"
+            ),
+        )
+
+        self.previous_button = ttk.Button(buttons_frame, text=_("< Skip"), command=self.on_previous_click)
+        self._update_previous_button_state()
+        self.previous_button.pack(side=tk.RIGHT, padx=(8, 0))
+        self.navigation_lock.register(self.previous_button)
+        show_tooltip(
+            self.previous_button,
+            _(
+                "Go to the previous configuration step parameter file without uploading any changes to the flight "
+                "controller\nIf changes have been made to the current file it will ask if you want to save them"
+            ),
+        )
+
+    def _create_log_analysis_progress(self, message: str) -> ProgressWindow:
+        show_only_when_update_called = False
+        progress = self.ui.create_progress_window(
+            self.root,
+            _(".bin Log Analysis"),
+            message,
+            show_only_when_update_called,
+        )
+        progress.progress_bar.configure(mode="indeterminate")
+        progress.progress_bar.start(10)
+        return progress
+
+    def _resolve_log_analysis_inputs(
+        self,
+        log_vehicle_type: str,
+        log_firmware_version: tuple[int, int, int],
+        inputs: LogAnalysisInputs,
+    ) -> LogAnalysisInputs | None:
+        """Validate log identity and return project or log-specific analysis inputs."""
+        try:
+            validate_log_matches_vehicle(
+                log_vehicle_type,
+                log_firmware_version,
+                inputs.project_vehicle_type,
+                inputs.project_firmware_version,
+            )
+            return inputs
+        except ValueError as error:
+            mismatch_error = str(error)
+
+        version_text = ".".join(str(part) for part in log_firmware_version)
+        if not self.ui.ask_yesno(
+            _("Log Mismatch"),
+            _("{error}\n\nAnalyse this log anyway using ArduPilot metadata for {vehicle_type} {version}?").format(
+                error=mismatch_error,
+                vehicle_type=log_vehicle_type,
+                version=version_text,
+            ),
+        ):
+            return None
+
+        progress = self._create_log_analysis_progress(_("Downloading parameter metadata for this log, please wait..."))
+        try:
+            apm_doc = self.ui.load_apm_doc(self.parameter_editor.get_vehicle_directory(), log_vehicle_type, version_text)
+            return self.parameter_editor.get_log_analysis_context_inputs(apm_doc=apm_doc)
+        finally:
+            progress.destroy()
+
+    def _set_log_analysis_progress_mode(
+        self, progress: ProgressWindow
+    ) -> tuple[Callable[[int, int], None], Callable[[], None]]:
+        """Return a thread-safe recorder and a main-thread flush callable."""
+        pct_state = -1
+        current_state = 0
+        total_state = 0
+        is_determinate_state = False
+        lock = threading.Lock()
+
+        def record_progress(current: int, total: int) -> None:
+            """Background thread only — zero Tk calls."""
+            nonlocal pct_state, current_state, total_state
+            if total == 0:
+                return
+            pct = int(current * 100 / total)
+            with lock:
+                if pct != pct_state:
+                    pct_state = pct
+                    current_state = current
+                    total_state = total
+
+        def flush_to_ui() -> None:
+            """Main thread only — reads state and updates widgets."""
+            nonlocal is_determinate_state
+            with lock:
+                pct = pct_state
+                current = current_state
+                total = total_state
+                is_det = is_determinate_state
+            if pct < 0:
+                return
+            if not is_det:
+                progress.progress_bar.stop()
+                progress.progress_bar.configure(mode="determinate")
+                with lock:
+                    is_determinate_state = True
+            progress.update_progress_bar(current, total)
+
+        return record_progress, flush_to_ui
+
+    def on_analyse_log_click(self) -> None:
+        """Handle the analyse log button click."""
+        if self.navigation_lock.locked:
+            return
+        filepath = self.ui.askopenfilename(
+            title=_("Select a flight log"),
+            filetypes=[(_("ArduPilot binary log files"), "*.bin"), (_("All files"), "*.*")],
+        )
+        if not filepath:
+            return
+        self._analyse_log_file(filepath)
+
+    def _navigate_to_config_step(self, step: str) -> None:
+        if self.navigation_lock.locked:
+            return
+        if not step or step not in self.file_selection_combobox["values"]:
+            return
+        self._log_report_return_pending = True
+        self.file_selection_combobox.set(step)
+        self.on_param_file_combobox_change(None, forced=True)
+
+    def _analyse_log_file(self, filepath: str) -> None:
+
+        try:
+            inputs = self.parameter_editor.get_log_analysis_context_inputs()
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            self.ui.show_error(_("Log Analysis Error"), str(e))
+            return
+
+        progress = self._create_log_analysis_progress(_("Reading flight log, please wait..."))
+
+        result_container: list = []
+        error_container: list = []
+
+        progress_callback, flush_progress = self._set_log_analysis_progress_mode(progress)
+        extract_log_data = self.ui.extract_log_data
+
+        def run_extraction() -> None:
+            try:
+                result_container.append(extract_log_data(filepath, progress_callback))
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                error_container.append(e)
+
+        def check_done() -> None:
+            flush_progress()
+            if thread.is_alive():
+                self.root.after(100, check_done)
+                return
+            self._log_analysis_running = False
+            progress.destroy()
+            if error_container:
+                self.ui.show_error(_("Log Analysis Error"), str(error_container[0]))
+            elif result_container:
+                log_data = result_container[0]
+                if log_data.vehicle_type is None or log_data.firmware_version is None:
+                    self.ui.show_error(_("Log Analysis Error"), _("No firmware version information found in parsed log"))
+                    return
+                try:
+                    resolved_inputs = self._resolve_log_analysis_inputs(
+                        log_data.vehicle_type,
+                        log_data.firmware_version,
+                        inputs,
+                    )
+                    if resolved_inputs is None:
+                        return
+                    summary = self.ui.analyze_log_data(
+                        log_data,
+                        project_vehicle_type=resolved_inputs.project_vehicle_type,
+                        project_firmware_version=resolved_inputs.project_firmware_version,
+                        vehicle_components=resolved_inputs.vehicle_components,
+                        configuration_steps=resolved_inputs.configuration_steps,
+                        apm_doc=resolved_inputs.apm_doc,
+                        validate_project=False,
+                    )
+                    report = None
+                except Exception as e:  # pylint: disable=broad-exception-caught
+                    self.ui.show_error(_("Log Analysis Error"), str(e))
+                    return
+
+                report_window = LogAvailabilityReportWindow(
+                    self.root,
+                    summary,
+                    self.parameter_editor.get_vehicle_directory(),
+                    is_fc_connected=self.parameter_editor.is_fc_connected,
+                    upload_callback=self.upload_selected_params,
+                    navigate_callback=self._navigate_to_config_step,
+                    report=report,
+                )
+                self._log_availability_report_window = report_window
+
+                if isinstance(self.root, tk.Tk) and UsagePopupWindow.should_display("log_availability_report"):
+                    display_log_availability_report_usage_popup(report_window.root)
+
+        thread = threading.Thread(target=run_extraction, daemon=True)
+        thread.start()
+        self._log_analysis_running = True
+        self.root.after(100, check_done)
+
+        def display_log_availability_report_usage_popup(parent: tk.Tk | tk.Toplevel) -> None:
+            usage_popup_window = BaseWindow(parent)
+            usage_popup_window.root.withdraw()
+            instructions_text = RichText(usage_popup_window.main_frame, height=12, width=80)
+            instructions_text.insert(tk.END, _("Log availability Report\n\n"), "title")
+            instructions_text.insert(
+                tk.END,
+                _(
+                    "Analysis is only as good as the data in your log.\n\n"
+                    "If a subsystem is not logging, or its parameters are misconfigured, "
+                    "the analyser cannot give you reliable results for that subsystem.\n\n"
+                    "This report tells you exactly what your ArduPilot .bin log can and cannot support for analysis, "
+                    "and points you to the configuration step that fixes each gap.\n\n"
+                    "Hover over any issue count to see the details.\n"
+                    "Issues link back to the configuration step that fixes them."
+                ),
+            )
+            UsagePopupWindow.display(
+                cast("tk.Tk", parent),
+                usage_popup_window,
+                _("Log availability Report"),
+                "log_availability_report",
+                "520x320",
+                instructions_text,
+            )
+
+    def _deactivate_plugin_view(self) -> None:
+        """Stop plugin activity and remove its controls, bindings and timers."""
+        # Call deactivation hook on current plugin before cleanup
+        if self.current_plugin_view is not None and hasattr(self.current_plugin_view, "on_deactivate"):
+            try:
+                self.current_plugin_view.on_deactivate()  # pyright: ignore[reportAttributeAccessIssue]
+            except (AttributeError, TypeError) as e:
+                logging_warning(_("Error deactivating plugin: %s"), e)
+
+        # Clean up existing plugin view
+        if self.current_plugin_view is not None:
+            try:
+                self.current_plugin_view.destroy()
+            except (AttributeError, tk.TclError) as e:
+                logging_warning(_("Error destroying plugin view: %s"), e)
+            finally:
+                self.current_plugin_view = None
+
+    def _cleanup_plugin_views(self) -> None:
+        """Clean up existing plugin views and UI elements."""
+        self._deactivate_plugin_view()
+
+        # Note: parameter_editor_table doesn't need explicit destroy()
+        # It will be automatically destroyed when its parent container is destroyed
+
+        # Clean up existing paned window
+        if self.parameter_area_paned is not None:
+            try:
+                self.parameter_area_paned.destroy()
+            except (AttributeError, tk.TclError) as e:
+                logging_warning(_("Error destroying paned window: %s"), e)
+            finally:
+                self.parameter_area_paned = None
+
+    def _update_plugin_layout(self, plugin: Optional[dict], *, force_reload: bool = False) -> None:  # noqa: UP045
+        """
+        Update the plugin layout based on the current plugin configuration.
+
+        This method handles the complete lifecycle of plugin views:
+        - Calls deactivation hook on current plugin
+        - Destroys existing plugin views and UI elements
+        - Creates new layout based on plugin placement
+        - Instantiates new plugin view
+        - Calls activation hook on new plugin
+        - Recreates parameter table
+
+        Args:
+            plugin: Plugin configuration dict with 'name' and 'placement' keys, or None
+            force_reload: Retry loading a missing view or reload after step navigation.
+
+        """
+        # If plugin configuration hasn't changed at all, do nothing
+        if self.current_plugin == plugin and not force_reload:
+            return
+
+        # Determine old and new placements
+        old_placement = self.current_plugin.get("placement") if self.current_plugin else None
+        new_placement = plugin.get("placement") if plugin else None
+
+        # Optimization: If both old and new are None (no plugin), avoid any widget destruction
+        if old_placement is None and new_placement is None:
+            self.current_plugin = plugin
+            return
+
+        # If layout structure is the same, just swap the plugin content without rebuilding
+        if old_placement == new_placement and old_placement is not None and plugin is not None:
+            # Same layout structure, just swap plugin
+            self._swap_plugin_in_place(plugin)
+            return
+
+        # Layout structure is different - need full rebuild
+        self._rebuild_plugin_layout(plugin)
+
+    def _swap_plugin_in_place(self, plugin: dict) -> None:
+        """
+        Swap plugin content without rebuilding the entire layout.
+
+        This is an optimization for when the layout structure (left/top) doesn't change,
+        only the plugin itself changes.
+
+        Args:
+            plugin: New plugin configuration dict
+
+        """
+        self._deactivate_plugin_view()
+
+        # Locate the existing plugin parent frame based on placement strategy.
+        # This avoids full layout rebuild when only the plugin content needs updating.
+        placement = plugin.get("placement")
+        plugin_parent: ttk.Frame | None = None
+
+        if placement == "left" and self.parameter_area_paned is not None:
+            # Left placement uses a PanedWindow with plugin in the first (left) pane
+            panes: tuple[str, ...] = self.parameter_area_paned.panes()  # type: ignore[no-untyped-call]
+            if panes:
+                # Convert Tcl pane path to widget reference
+                plugin_parent = self.parameter_area_paned.nametowidget(panes[0])
+        elif placement == "top":
+            # Top placement uses a vertical stack with plugin frame at the top
+            # Navigate the widget tree to find the plugin container
+            for child in self.parameter_area_container.winfo_children():
+                if isinstance(child, ttk.Frame):
+                    # Located the top_container frame
+                    children = child.winfo_children()
+                    if children and isinstance(children[0], ttk.Frame):
+                        plugin_parent = children[0]
+                    break
+
+        if plugin_parent:
+            # Clear the plugin parent frame
+            for widget in plugin_parent.winfo_children():
+                widget.destroy()
+
+            # Load new plugin into existing frame
+            self._load_plugin(plugin_parent, plugin)
+            if placement == "top":
+                self._configure_top_plugin_rows(plugin_parent)
+
+        self.current_plugin = plugin
+
+    def _configure_top_plugin_rows(self, plugin_parent: ttk.Frame) -> None:
+        """Only let top plugins yield height when their content can be scrolled."""
+        widgets: list[tk.Misc] = [plugin_parent]
+        scrollable = False
+        while widgets and not scrollable:
+            widget = widgets.pop()
+            scrollable = isinstance(widget, ScrollFrame)
+            if not scrollable:
+                widgets.extend(widget.winfo_children())
+
+        top_container = cast("ttk.Frame", plugin_parent.master)
+        # A zero-weight row keeps its natural requested height, including when
+        # feedback text grows after Apply. Do not freeze a measured minsize.
+        top_container.rowconfigure(0, weight=int(scrollable), minsize=0)
+        # The table scrolls, so it takes the shortfall for fixed-height plugins.
+        # Scrollable assistants instead share space and retain editable rows.
+        top_container.rowconfigure(2, weight=1, minsize=round(120 * self.dpi_scaling_factor) if scrollable else 0)
+
+    def _rebuild_plugin_layout(self, plugin: dict | None) -> None:
+        """
+        Completely rebuild the plugin layout structure.
+
+        This is only called when the layout structure actually changes
+        (e.g., from no plugin to left plugin, or from left to top).
+
+        Args:
+            plugin: New plugin configuration dict or None
+
+        """
+        # Clean up existing views
+        self._cleanup_plugin_views()
+
+        # Complete rebuild: destroy old layout and create new structure from scratch
+        self.parameter_area_container.destroy()
+
+        # Recreate container to hold the new layout configuration
+        self.parameter_area_container = ttk.Frame(self.main_frame)
+        self.parameter_area_container.pack(side="top", fill="both", expand=True)
+
+        self.current_plugin = plugin
+        plugin_parent: ttk.Frame | None = None
+
+        if plugin and plugin.get("placement") == "left":
+            # Left placement: Create horizontal split with plugin on left, parameters on right
+            # This gives the plugin persistent visibility while working with parameters
+            self.parameter_area_paned = tk.PanedWindow(self.parameter_area_container, orient=tk.HORIZONTAL)
+            self.parameter_area_paned.pack(side="top", fill="both", expand=True)
+
+            # Create left pane for plugin with minimum width to ensure visibility
+            left_frame = ttk.Frame(self.parameter_area_paned)
+            self.parameter_area_paned.add(left_frame, minsize=500, stretch="always")
+            self._set_pane_sticky(self.parameter_area_paned, left_frame)
+
+            plugin_parent = left_frame
+
+            # Create right pane for parameter table (gets remaining space)
+            right_frame = ttk.Frame(self.parameter_area_paned)
+            self.parameter_area_paned.add(right_frame, minsize=round(300 * self.dpi_scaling_factor), stretch="always")
+            self._set_pane_sticky(self.parameter_area_paned, right_frame)
+
+            self.parameter_container = right_frame
+        elif plugin and plugin.get("placement") == "top":
+            # Top placement: Create vertical stack with plugin above parameters
+            # This gives plugin full horizontal width, useful for wide controls
+            top_container = ttk.Frame(self.parameter_area_container)
+            top_container.pack(side="top", fill="both", expand=True)
+            top_container.columnconfigure(0, weight=1)
+            top_container.rowconfigure(0, weight=0)
+            top_container.rowconfigure(2, weight=1)
+
+            # Preserve controls until the loaded view is known to be scrollable.
+            top_plugin_frame = ttk.Frame(top_container)
+            top_plugin_frame.grid(row=0, column=0, sticky="nsew")
+            plugin_parent = top_plugin_frame
+
+            # Visual separator between plugin and parameter table
+            ttk.Separator(top_container, orient="horizontal").grid(row=1, column=0, sticky="ew", pady=2)
+
+            # Create bottom frame for parameter table (takes remaining vertical space)
+            bottom_frame = ttk.Frame(top_container)
+            bottom_frame.grid(row=2, column=0, sticky="nsew")
+
+            self.parameter_container = bottom_frame
+        else:
+            # No plugin configured: use simple single-frame layout
+            # Parameter table directly fills the entire container
+            self.parameter_container = self.parameter_area_container
+
+        # Recreate the parameter editor table in the appropriate container.
+        # The container varies based on plugin placement (left pane, below plugin, or full area).
+        self.parameter_editor_table = ParameterEditorTable(self.parameter_container, self.parameter_editor, self)
+        self.parameter_editor_table.pack(side="top", fill="both", expand=True)
+
+        # Plugin construction or activation can open a modal dialog, which runs
+        # a nested event loop. Build both panes and the table before that loop
+        # can measure the layout; adding a pane later does not reclaim its width.
+        if plugin_parent is not None and plugin is not None:
+            self._load_plugin(plugin_parent, plugin)
+            if plugin.get("placement") == "top":
+                self._configure_top_plugin_rows(plugin_parent)
+
+    @staticmethod
+    def _set_pane_sticky(paned_window: tk.PanedWindow, pane: tk.Widget) -> None:
+        """Type-safe helper to configure pane stickiness on paned windows."""
+        pane_interface = cast("_PaneConfigurable", paned_window)
+        pane_interface.paneconfigure(pane, sticky="nsew")
+
+    def _load_plugin(self, parent_frame: ttk.Frame, plugin: dict) -> None:
+        """
+        Load a plugin into the given frame using the plugin factory.
+
+        This method uses dependency injection to avoid circular imports.
+        Plugins are registered with the factory and instantiated dynamically.
+
+        Args:
+            parent_frame: The frame to load the plugin into
+            plugin: Plugin configuration dict with 'name' key
+
+        """
+        plugin_name = plugin.get("name")
+        if not plugin_name:
+            ttk.Label(parent_frame, text=_("Plugin configuration missing name")).pack()
+            return
+
+        # Check if plugin is registered
+        if not plugin_factory.is_registered(plugin_name):
+            error_msg = _("Unknown plugin: {plugin_name}").format(plugin_name=plugin_name)
+            ttk.Label(parent_frame, text=error_msg, foreground="red").pack()
+            logging_error(error_msg)
+            return
+
+        # Get the data model for the plugin
+        try:
+            model = self.parameter_editor.create_plugin_data_model(plugin_name)
+        except ValueError as exc:
+            error_msg = str(exc)
+            ttk.Label(parent_frame, text=error_msg, foreground="red").pack()
+            logging_error(error_msg)
+            return
+        if model is None:
+            error_msg = _("Plugin requires flight controller connection")
+            ttk.Label(parent_frame, text=error_msg).pack()
+            logging_warning(error_msg)
+            return
+
+        # Create plugin using factory with error handling
+        try:
+            plugin_view = plugin_factory.create(plugin_name, parent_frame, model, self)
+            if plugin_view is None:
+                msg = _("Failed to create plugin: {plugin_name}").format(plugin_name=plugin_name)
+                logging_error(msg)
+                ttk.Label(parent_frame, text=msg, foreground="red").pack()
+                return
+
+            plugin_view = cast("PluginView", plugin_view)
+
+            # Pack the plugin view
+            plugin_view.pack(fill="both", expand=True)
+
+            # Call activation hook if available
+            if hasattr(plugin_view, "on_activate"):
+                try:
+                    plugin_view.on_activate()  # pyright: ignore[reportAttributeAccessIssue]
+                except (AttributeError, TypeError) as e:
+                    logging_warning(_("Error activating plugin: %s"), e)
+                    # Failed to activate - clean up and abort
+                    with contextlib.suppress(AttributeError, tk.TclError):
+                        plugin_view.destroy()
+                    return
+
+            # Only store reference after successful activation
+            self.current_plugin_view = plugin_view
+
+        except (ImportError, AttributeError, TypeError, ValueError) as e:
+            msg = _("Error loading plugin {plugin_name}: {error}").format(plugin_name=plugin_name, error=str(e))
+            logging_exception(msg)  # Log full traceback
+            ttk.Label(parent_frame, text=msg, foreground="red").pack()
+
+    def _do_tempcal_imu(self, selected_file: str) -> None:
+        """
+        Handle IMU temperature calibration using the new callback-based workflow.
+
+        This method creates GUI-specific callback functions and injects them into
+        the business logic workflow method, achieving proper separation of concerns.
+        """
+
+        def select_file(title: str, filetypes: list[str]) -> Optional[str]:  # noqa: UP045
+            """GUI callback for file selection dialog."""
+            return self.ui.askopenfilename(title=title, filetypes=[(_("ArduPilot binary log files"), filetypes)])
+
+        def get_progress_callback() -> Callable | None:
+            """Create and return progress window callback only when calibration will actually happen."""
+            show_only_on_update = True
+            tempcal_imu_progress_window = self.ui.create_progress_window(
+                self.root,
+                _("Reading IMU calibration messages"),
+                _("Please wait, this can take a long time"),
+                show_only_on_update,
+            )
+            # Store reference for cleanup
+            self._tempcal_imu_progress_window = tempcal_imu_progress_window
+            return tempcal_imu_progress_window.update_progress_bar_300_pct
+
+        try:
+            # Inject GUI callbacks into business logic workflow
+            _success = self.parameter_editor.handle_imu_temperature_calibration_workflow(
+                selected_file,
+                ask_user_confirmation=self.ui.ask_yesno,
+                select_file=select_file,
+                show_warning=self.ui.show_warning,
+                show_error=self.ui.show_error,
+                get_progress_callback=get_progress_callback,
+            )
+
+        finally:
+            # Clean up progress window if it was created
+            if self._tempcal_imu_progress_window is not None:
+                self._tempcal_imu_progress_window.destroy()
+                self._tempcal_imu_progress_window = None
+
+    def _handle_dialog_choice(self, result: list, dialog: tk.Toplevel, choice: ExperimentChoice) -> None:
+        result.append(choice)
+        dialog.destroy()
+
+    def _should_copy_fc_values_to_file(self, selected_file: str) -> ExperimentChoice:
+        def ask_user_choice(title: str, message: str, options: list[str]) -> ExperimentChoice:  # pylint: disable=too-many-locals
+            """GUI callback for asking user choice with custom dialog."""
+            # Create custom dialog with Close, Yes, No buttons
+            dialog = tk.Toplevel(self.root)
+            # Hide dialog initially to prevent flickering
+            dialog.withdraw()
+            dialog.transient(self.root)
+            dialog.title(title)
+            dialog.resizable(width=False, height=False)
+            dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
+
+            # Message text
+            message_label = tk.Label(dialog, text=message, justify=tk.LEFT, padx=20, pady=10)
+            message_label.pack(padx=10, pady=10)
+
+            # Clickable link to tuning guide
+            safe_font_config = get_safe_font_config()
+            link_label = tk.Label(
+                dialog,
+                text=_("Click here to open the Tuning Guide relevant Section"),
+                fg="blue",
+                cursor="hand2",
+                font=(str(safe_font_config["family"]), int(safe_font_config["size"]), "underline"),
+            )
+            link_label.pack(pady=(0, 10))
+            link_label.bind("<Button-1>", lambda _e: self.parameter_editor.open_documentation_in_browser(selected_file))
+
+            # Result variable
+            result: list[ExperimentChoice] = []
+
+            # Button frame
+            button_frame = tk.Frame(dialog)
+            button_frame.pack(pady=10)
+
+            # Close button (default)
+            close_button = tk.Button(
+                button_frame,
+                text=options[0],  # "Close"
+                width=10,
+                command=lambda: self._handle_dialog_choice(result, dialog, choice="close"),
+            )
+            close_button.pack(side=tk.LEFT, padx=5)
+
+            # Yes button
+            yes_button = tk.Button(
+                button_frame,
+                text=options[1],
+                width=10,  # "Yes"
+                command=lambda: self._handle_dialog_choice(result, dialog, choice=True),
+            )
+            yes_button.pack(side=tk.LEFT, padx=5)
+
+            # No button
+            no_button = tk.Button(
+                button_frame,
+                text=options[2],
+                width=10,  # "No"
+                command=lambda: self._handle_dialog_choice(result, dialog, choice=False),
+            )
+            no_button.pack(side=tk.LEFT, padx=5)
+
+            dialog.bind("<Return>", lambda _event: self._handle_dialog_choice(result, dialog, choice="close"))
+
+            # Center the dialog on the parent window
+            dialog.deiconify()
+            if not is_macos_sequoia_or_older():
+                dialog.update_idletasks()
+            dialog_width = dialog.winfo_width()
+            dialog_height = dialog.winfo_height()
+            if dialog_width <= 1:
+                dialog_width = dialog.winfo_reqwidth()
+            if dialog_height <= 1:
+                dialog_height = dialog.winfo_reqheight()
+            parent_x = self.root.winfo_rootx()
+            parent_y = self.root.winfo_rooty()
+            parent_width = self.root.winfo_width()
+            parent_height = self.root.winfo_height()
+            x = parent_x + (parent_width - dialog_width) // 2
+            y = parent_y + (parent_height - dialog_height) // 2
+            dialog.geometry(f"+{x}+{y}")
+            dialog.lift()
+            # Show dialog at correct position and make it modal
+            # On macOS, grab_set() causes UI freeze (issue #1264), so skip it
+            if sys_platform != "darwin":
+                dialog.focus_set()  # focus_force() crashes on Linux/X11 in python3.9 headless environments
+                dialog.grab_set()
+
+            # Set focus after dialog is shown and modal
+            close_button.focus_set()  # Give the Close button focus
+
+            # Wait until dialog is closed
+            self.root.wait_window(dialog)
+            return result[-1] if result else "close"
+
+        return self.parameter_editor.handle_copy_fc_values_workflow(
+            selected_file,
+            ask_user_choice,
+            self.ui.show_info,
+        )
+
+    def _should_upload_file_to_fc(self, selected_file: str) -> bool:
+        while True:
+            progress_windows: list[ProgressWindow] = []
+            try:
+                upload_success = self.parameter_editor.should_upload_file_to_fc_workflow(
+                    selected_file,
+                    ask_confirmation=self.ui.ask_yesno,
+                    show_error=self.ui.show_error,
+                    show_warning=self.ui.show_warning,
+                    get_progress_callback=partial(self._create_file_upload_progress_callback, progress_windows),
+                    run_upload=self._run_configured_file_upload,
+                )
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                logging_exception("File upload to flight controller failed")
+                retry = self.ui.ask_retry_cancel(
+                    _("File Upload Error"),
+                    f"{_('Failed to upload file to flight controller:')} {e}\n\n{_('Do you want to retry?')}",
+                )
+            else:
+                if upload_success:
+                    return True
+                retry = self.ui.ask_retry_cancel(
+                    _("File Upload Error"),
+                    _("File upload failed. Do you want to retry?"),
+                )
+            finally:
+                for progress_window in progress_windows:
+                    progress_window.destroy()
+                self.file_upload_progress_window = None
+
+            if not retry:
+                return False
+
+    def _run_configured_file_upload(self, task: UploadTask, total: int, report: ProgressCallback) -> FileUploadResult:
+        """Run transport off-thread while the modal wait services Tk timers and progress."""
+        owner = object()
+        completed = tk.BooleanVar(master=self.root, value=False)
+        outcome: list[tuple[object | None, Exception | None]] = []
+        runner = BackgroundTaskRunner(self.root.after)
+        self.navigation_lock.acquire(owner)
+        self._configured_upload_active = True
+
+        def done(result: object | None, error: Exception | None) -> None:
+            outcome.append((result, error))
+            completed.set(True)
+
+        try:
+            # Step navigation has already destroyed the outgoing plugin.
+            # Start the popup clock before the transport receives its first ACK.
+            report(0, total)
+            runner.start(task, report, done)
+            self.root.wait_variable(completed)
+            result, error = outcome[0]
+            if error is not None:
+                raise error
+            return cast("FileUploadResult", result)
+        finally:
+            self.navigation_lock.release(owner)
+            popup = getattr(self, "file_upload_progress_window", None)
+            if popup is not None:
+                popup.destroy()
+                self.file_upload_progress_window = None
+            self._configured_upload_active = False
+            if self._close_after_configured_upload:
+                self._close_after_configured_upload = False
+                self.root.after_idle(self.close_connection_and_quit)
+
+    def _create_file_upload_progress_callback(self, progress_windows: list[ProgressWindow]) -> Callable[[int, int], None]:
+        """Create and retain a progress window for one file upload."""
+        progress_window = self.ui.create_progress_window(
+            self.root,
+            _("Uploading file"),
+            _("Uploaded {} of {} bytes"),
+            only_show_when_update_called=True,
+        )
+        progress_windows.append(progress_window)
+        self.file_upload_progress_window = progress_window
+        progress_window.enable_transfer_progress(TransferDirection.UPLOAD)
+
+        def report_bytes(current: int, total: int) -> None:
+            progress_window.update_transfer_progress(TransferProgress(current, total, direction=TransferDirection.UPLOAD))
+
+        return report_bytes
+
+    @_with_fc_operation
+    def on_param_file_combobox_change(self, _event: Union[tk.Event, None], forced: bool = False) -> None:  # noqa: UP007
+        if self.navigation_lock.locked:
+            self.file_selection_combobox.set(self.parameter_editor.current_file)
+            return
+        if not self.file_selection_combobox["values"]:
+            return
+        selected_file = self.file_selection_combobox.get()
+        self._update_progress_bar_from_file(selected_file)
+
+        # Only proceed if file changed or forced
+        if self.parameter_editor.current_file != selected_file or forced:
+            # Write any pending changes before switching files
+            self.write_changes_to_intermediate_parameter_file()
+
+            # Yield the link before any workflow dialog or transfer can service Tk events.
+            # Keep the layout so the resulting step can reuse its plugin container.
+            self._deactivate_plugin_view()
+            self._param_file_change_active = True
+            try:
+                final_file, should_continue = self.parameter_editor.handle_param_file_change_workflow(
+                    selected_file,
+                    forced,
+                    self.gui_complexity,
+                    self.documentation_frame.get_auto_open_documentation_in_browser(),
+                    handle_imu_temp_cal=self._do_tempcal_imu,
+                    handle_copy_fc_values=self._should_copy_fc_values_to_file,
+                    handle_upload_file=self._should_upload_file_to_fc,
+                    ask_confirmation=self.ui.ask_yesno,
+                    show_error=self.ui.show_error,
+                    show_info=self.ui.show_info,
+                )
+            except Exception:
+                # Restore a usable plugin for the current step before propagating the failure.
+                self._update_plugin_layout(
+                    self.parameter_editor.get_plugin(self.parameter_editor.current_file), force_reload=True
+                )
+                raise
+            finally:
+                self._param_file_change_active = False
+
+            # If user chose to close, exit
+            if not should_continue:
+                self.root.quit()
+                self.ui.sys_exit(0)
+
+            # Update the combobox if file changed due to jump
+            if final_file != selected_file:
+                self.file_selection_combobox.set(final_file)
+
+            # Update GUI state
+            self.documentation_frame.refresh_documentation_labels()
+            self.documentation_frame.update_why_why_now_tooltip()
+
+            # Update plugin layout if needed
+            plugin = self.parameter_editor.get_plugin(final_file)
+            self._update_plugin_layout(plugin, force_reload=True)
+
+            # Repopulate parameter table with new file
+            self.repopulate_parameter_table()
+            self._update_skip_button_state()
+            self._update_previous_button_state()
+
+            # Update inline component editor for the current step
+            self._update_inline_component_editor(self.parameter_editor.get_current_component())
+
+            # Display optional instruction step
+            popup_data = self.parameter_editor.get_instructions_popup(final_file)
+            if popup_data:
+                msg = popup_data.get("msg", "")
+                popup_type = popup_data.get("type", "info")
+
+                if popup_type == "warning":
+                    self.ui.show_warning(_("Step Instructions"), _(msg))
+                else:
+                    self.ui.show_info(_("Step Instructions"), _(msg))
+
+    def _update_progress_bar_from_file(self, selected_file: str) -> None:
+        if self.parameter_editor.configuration_phases():
+            try:
+                step_nr = int(selected_file[:2])
+                self.stage_progress_bar.update_progress(step_nr)
+            except ValueError as _e:
+                msg = _("Failed to update progress bar, {selected_file} does not start with two digits like it should: {_e}")
+                logging_error(msg.format(**locals()))
+
+    @_with_fc_operation
+    def download_flight_controller_parameters(
+        self, redownload: bool = False, *, response_timeout: float | None = None
+    ) -> tuple[dict[str, float], dict[str, object]]:
+        operation_string = _("Re-downloading FC parameters") if redownload else _("Downloading FC parameters")
+        callbacks = TkThreadCallbacks()
+
+        def get_progress_callback() -> Callable | None:
+            """Create and return progress window callback for parameter download."""
+            show_when_downloading = False
+            param_download_progress_window = callbacks.call(
+                self.ui.create_progress_window,
+                self.root,
+                operation_string,
+                _("Downloaded {} of {} parameters"),
+                show_when_downloading,
+            )
+            # Store reference for cleanup
+            self._param_download_progress_window = param_download_progress_window
+            return callbacks.progress(param_download_progress_window.update_progress_bar)
+
+        # Download parameters using the lazy factory callback
+        def download() -> tuple[dict, dict]:
+            return self.parameter_editor.download_flight_controller_parameters(
+                get_progress_callback, response_timeout=response_timeout
+            )
+
+        resume_plugin = self._pause_plugin_receiver()
+        try:
+            download_result = callbacks.run(self.root, download) if is_macos_sequoia_or_older() else download()
+        finally:
+            try:
+                if self._param_download_progress_window is not None:
+                    self._param_download_progress_window.destroy()
+                    self._param_download_progress_window = None
+            finally:
+                resume_plugin()
+        if not redownload:
+            self.on_param_file_combobox_change(None, forced=True)  # the initial param read will trigger a table update
+        return download_result
+
+    def repopulate_parameter_table(self) -> None:
+        if not self.parameter_editor.current_file:
+            return  # no file was yet selected, so skip it
+        # Re-populate the table with the new parameters
+        self.parameter_editor_table.repopulate_table(self.show_only_differences.get(), self.gui_complexity)
+
+    def _on_component_data_changed(self) -> None:
+        """Called when a field in the inline component editor is changed by the user."""
+        if self._updating_inline_editor:
+            return  # prevent re-entrancy when repopulate_parameter_table triggers widget events
+        if self.inline_component_editor is None:
+            return  # callback fired without an active editor; nothing to sync
+        editor_data = self.inline_component_editor.get_component_data()
+        if "Components" not in editor_data:
+            return  # no component data to sync
+        self._updating_inline_editor = True
+        try:
+            # Atomically replace the in-memory components so derived-parameter expressions
+            # see the updated values when refresh_current_step_computed_parameters() runs.
+            if not self.parameter_editor.update_vehicle_components(editor_data["Components"]):
+                return
+            self.parameter_editor.refresh_current_step_computed_parameters()
+            # Workflow dialogs and upload waits can dispatch events from the outgoing inline editor.
+            if (
+                self.parameter_editor.current_file
+                and not self._param_file_change_active
+                and not self._configured_upload_active
+            ):
+                self._update_plugin_layout(self.parameter_editor.get_plugin(self.parameter_editor.current_file))
+            self.repopulate_parameter_table()
+        finally:
+            self._updating_inline_editor = False
+
+    def _update_inline_component_editor(self, component_name: str | None) -> None:
+        """Show or hide the inline component editor based on the current step's component attribute."""
+        # Do NOT short-circuit when component_name == self._inline_component_name.
+        # The in-memory component dict may have been reverted or saved since the last build
+        # (e.g. user declines to save Battery edits, then navigates to another step that also
+        # shows Battery).  Widget StringVars are populated once during populate_single_component
+        # and have no live binding to the dict, so a revert leaves them showing stale values
+        # unless we always rebuild.  The single-component rebuild is cheap (~10-20 widgets).
+
+        # Destroy any existing inline editor content.
+        for child in self.inline_component_container.winfo_children():
+            child.destroy()
+        self.inline_component_editor = None
+        self.inline_component_scroll_frame = None
+        self._inline_component_name = None
+
+        if component_name is None:
+            # Hide the container when no inline component editor is required.
+            self.inline_component_container.configure(text="")
+            self.inline_component_container.pack_forget()
+            self._fit_window_to_screen_height()
+            return
+
+        # Show (or re-show) the container with the new component name.
+        self.inline_component_container.configure(text=_(component_name))
+        if not self.inline_component_container.winfo_ismapped():
+            self.inline_component_container.pack(
+                side=tk.TOP, fill="x", expand=False, padx=(4, 4), before=self.parameter_area_container
+            )
+
+        self.inline_component_container.pack_propagate(flag=True)
+        scroll_frame = ScrollFrame(self.inline_component_container)
+        scroll_frame.canvas.configure(height=1)
+        scroll_frame.pack(side="top", fill="both", expand=True)
+        deps: ComponentEditorDeps = self.parameter_editor.get_component_editor_deps()
+        editor = ComponentEditorWindow(
+            __version__,
+            deps.local_filesystem,
+            deps.fc_parameters,
+            embedded_parent_frame=scroll_frame.view_port,
+            on_component_change=self._on_component_data_changed,
+        )
+        editor.populate_single_component(component_name)
+        self.inline_component_editor = editor
+        self._inline_component_name = component_name
+        if is_macos_sequoia_or_older():
+            # Measure this component's chrome on Configure, after Tk has laid it out.
+            self._inline_component_chrome_height = 0
+        else:
+            self.root.update_idletasks()
+            self._inline_component_chrome_height = (
+                self.inline_component_container.winfo_reqheight() - scroll_frame.winfo_reqheight()
+            )
+        self.inline_component_scroll_frame = scroll_frame
+        scroll_frame.view_port.bind("<Configure>", self._on_main_frame_resize, add="+")
+        self._fit_window_to_screen_height()
+
+    def _window_manager_controls_geometry(self) -> bool:
+        """Recognize maximised and full-screen windows across Tk platforms."""
+        if self.root.state() == "zoomed":
+            return True
+        for attribute in ("-zoomed", "-fullscreen"):
+            # -zoomed is an X11 attribute, unsupported by some other Tk platforms.
+            with contextlib.suppress(tk.TclError):
+                if self.root.tk.getboolean(self.root.attributes(attribute)):
+                    return True
+        return False
+
+    def _fit_window_to_screen_height(self, *, initialize: bool = False) -> None:
+        """Set the startup size, then preserve user sizing unless it exceeds the monitor."""
+        if not is_macos_sequoia_or_older():
+            self.root.update_idletasks()
+        if self._window_manager_controls_geometry():
+            self._resize_parameter_area_to_fit()
+            return
+        bounds = get_monitor_bounds(self.root)
+        root_y = self.root.winfo_rooty()
+        current_height = self.root.winfo_height()
+        if not initialize and bounds.top <= root_y and root_y + current_height <= bounds.bottom:
+            self._resize_parameter_area_to_fit()
+            return
+        # Reserve space above and below the client area for window decorations and panels.
+        margin = round(40 * self.dpi_scaling_factor)
+        available_height = max(1, bounds.bottom - bounds.top - 2 * margin)
+        requested_height = (
+            max(self.root.winfo_reqheight(), round(820 * self.dpi_scaling_factor)) if initialize else self.root.winfo_height()
+        )
+        window_height = min(requested_height, available_height)
+        target_y = max(bounds.top + margin, min(root_y, bounds.bottom - margin - window_height))
+        if initialize or window_height != requested_height or target_y != root_y:
+            window_width = round(990 * self.dpi_scaling_factor) if initialize else self.root.winfo_width()
+            # wm geometry uses frame coordinates, while winfo reports the client
+            # position on X11. Apply the client displacement to the WM position
+            # and preserve its horizontal anchor, avoiding decoration-sized drift.
+            geometry = re.fullmatch(r"\d+x\d+([+-]-?\d+)([+-]-?\d+)", self.root.geometry())
+            if geometry is not None:
+                window_x, window_y = geometry.groups()
+                displacement = target_y - root_y
+                if window_y.startswith("+"):
+                    window_y = f"+{int(window_y[1:]) + displacement}"
+                else:
+                    # A minus sign anchors the window to the bottom of the screen.
+                    window_y = f"-{int(window_y[1:]) + current_height - window_height - displacement}"
+                self.root.geometry(f"{window_width}x{window_height}{window_x}{window_y}")
+
+        if not is_macos_sequoia_or_older():
+            self.root.update_idletasks()
+        self._resize_parameter_area_to_fit()
+
+    def _bind_parameter_layout_events(self) -> None:
+        """Refit when the window or any fixed section changes its allocated size."""
+        self.main_frame.bind("<Configure>", self._on_main_frame_resize, add="+")
+        for widget in self.main_frame.winfo_children():
+            if widget is not self.parameter_area_container:
+                widget.bind("<Configure>", self._on_main_frame_resize, add="+")
+
+    def _on_main_frame_resize(self, _event: tk.Event) -> None:
+        """Fit once idle, after fixed controls have re-wrapped at the new width."""
+        if not self._parameter_area_resize_pending and not self._parameter_area_resize_running:
+            self._parameter_area_resize_pending = True
+            self.root.after_idle(self._resize_parameter_area_to_fit)
+
+    def _minimum_parameter_area_height(self) -> int:
+        """Reserve table space alongside, or below, the current plugin."""
+        minimum_height = round(120 * self.dpi_scaling_factor)
+        if self.current_plugin and self.current_plugin_view is not None:
+            plugin_height = cast("tk.Widget", self.current_plugin_view).winfo_reqheight()
+            placement = self.current_plugin.get("placement")
+            if placement == "left":
+                minimum_height = max(minimum_height, plugin_height)
+            elif placement == "top":
+                # Include the separator's height and padding in the vertical stack.
+                minimum_height += plugin_height + 6
+        return minimum_height
+
+    def _resize_parameter_area_to_fit(self) -> None:  # noqa: PLR0915  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
+        """Give the parameter area the height left after all fixed controls are placed."""
+        if self._parameter_area_resize_running:
+            return
+
+        self._parameter_area_resize_pending = False
+        if int(str(self.parameter_area_container.cget("height"))) == 0:
+            # Measure new panes before fixing their height, so the parameter
+            # table has a requested width when the PanedWindow first lays out.
+            self._parameter_area_resize_running = True
+            try:
+                if not is_macos_sequoia_or_older():
+                    self.parameter_area_container.update_idletasks()
+            finally:
+                self._parameter_area_resize_running = False
+
+        # The parameter area is the only expandable section between the fixed
+        # header/component editor and the bottom buttons. Give it only the height
+        # left after those other widgets have been placed, so its requested size
+        # cannot consume the button row on short screens.
+        fixed_height = 0
+        for widget in self.main_frame.winfo_children():
+            if widget is self.parameter_area_container or widget.winfo_manager() != "pack":
+                continue
+            pack_info = cast("tk.Pack", widget).pack_info()
+            vertical_padding = pack_info.get("pady", 0)
+            padding_values: tuple[int | str, ...]
+            if isinstance(vertical_padding, tuple):
+                padding_values = vertical_padding
+            elif isinstance(vertical_padding, str):
+                padding_values = self.root.tk.splitlist(vertical_padding)
+            else:
+                padding_values = (vertical_padding,)
+            padding_height = sum(widget.winfo_pixels(value) for value in padding_values)
+            if len(padding_values) == 1:
+                padding_height *= 2
+            if widget is self.inline_component_container and self.inline_component_scroll_frame is not None:
+                fixed_height += padding_height
+            else:
+                fixed_height += widget.winfo_reqheight() + padding_height
+
+        if self.inline_component_scroll_frame is not None:
+            # Keep a useful parameter table on component-heavy steps such as Battery.
+            # Extra component fields remain accessible through the existing ScrollFrame.
+            scroll_frame = self.inline_component_scroll_frame
+            if self._inline_component_chrome_height <= 0 and scroll_frame.winfo_height() > 1:
+                # Configure events supply settled geometry even when macOS must
+                # defer idle rendering during the initial component construction.
+                self._inline_component_chrome_height = max(
+                    0, self.inline_component_container.winfo_height() - scroll_frame.winfo_height()
+                )
+            content_height = scroll_frame.view_port.winfo_reqheight() + 8
+            desired_height = content_height + self._inline_component_chrome_height
+            minimum_table_height = self._minimum_parameter_area_height()
+            available_height = max(1, self.main_frame.winfo_height() - fixed_height)
+            minimum_component_height = round(80 * self.dpi_scaling_factor)
+            # Share very limited space equally until the component minimum fits.
+            # Then let the parameter area reach its minimum before growing the component
+            # panel further. Both allocations grow continuously with the window.
+            component_budget = max(
+                min(minimum_component_height, available_height // 2), available_height - minimum_table_height
+            )
+            component_height = min(desired_height, max(1, component_budget))
+            scroll_frame.canvas.configure(height=content_height)
+            requested_height = self.inline_component_container.winfo_reqheight()
+            configured_height = int(str(self.inline_component_container.cget("height")))
+            if configured_height != component_height or requested_height != component_height:
+                self.inline_component_container.configure(height=component_height)
+            self.inline_component_container.pack_propagate(flag=False)
+            fixed_height += component_height
+
+        table_height = max(1, self.main_frame.winfo_height() - fixed_height)
+        configured_height = int(str(self.parameter_area_container.cget("height")))
+        if configured_height != table_height:
+            self.parameter_area_container.pack_propagate(flag=False)
+            self.parameter_area_container.configure(height=table_height)
+
+    def on_show_only_changed_checkbox_change(self) -> None:
+        self.repopulate_parameter_table()
+
+    @_with_fc_operation
+    def on_compare_and_upload_parameter_file_click(self) -> None:
+        """Select an external parameter file and open its upload preview."""
+        if self.navigation_lock.locked:
+            return
+        # The same file-picker options are used by the compare and upload dialog.
+        # pylint: disable=duplicate-code
+        filepath = self.ui.askopenfilename(
+            title=_("Select an ArduPilot parameter file"),
+            filetypes=[
+                (_("ArduPilot parameter files"), "*.parm *.param"),
+                (_("All files"), "*.*"),
+            ],
+        )
+        if not filepath:
+            return
+        # pylint: enable=duplicate-code
+
+        try:
+            parameters = self.parameter_editor.load_external_parameter_file(filepath)
+        except (OSError, ValueError) as exc:
+            self.ui.show_error(_("Parameter file error"), str(exc))
+            return
+
+        window = ParameterFileUploadWindow(self, filepath, parameters)
+        self._retain_fc_operation_until_closed(window.root)
+
+    @_with_fc_operation
+    def on_export_parameters_click(self) -> None:
+        """Open the parameter export window for the current FC values."""
+        if self.navigation_lock.locked:
+            return
+        parameters = self.parameter_editor.get_fc_parameters_for_export()
+        window = ParameterExportWindow(self, parameters)
+        self._retain_fc_operation_until_closed(window.root)
+
+    @_with_fc_operation
+    def on_mavlink_inspector_click(self) -> None:
+        """Give the embedded inspector exclusive access until its window closes."""
+        if self.navigation_lock.locked or not self.parameter_editor.is_fc_link_connected:
+            return
+        browser = getattr(self, "_file_browser_window", None)
+        if browser is not None and browser.root.winfo_exists():
+            self.ui.show_error(
+                _("File browser is open"), _("Close the flight-controller file browser before opening the inspector.")
+            )
+            return
+        resume_plugin: Callable[[], None] | None = None
+        owner = object()
+        window = None
+        unlock = ParameterEditorWindow._lock_connection_plugin(self, owner)
+        try:
+            resume_plugin = ParameterEditorWindow._pause_plugin_receiver(self)
+            window = open_mavlink_inspector_window(self.root, self.parameter_editor.flight_controller)
+            self.root.wait_window(window.root)
+        finally:
+            if window is not None:
+                window.close()
+            unlock()
+            if resume_plugin is not None:
+                resume_plugin()
+
+    def on_upload_selected_and_stay_click(self) -> None:
+        """Upload selected parameters and remain on the current parameter file."""
+        if self.navigation_lock.locked:
+            return
+        if isinstance(self.root, tk.Tk) and UsagePopupWindow.should_display("only_changed_get_uploaded"):
+            only_upload_changed_parameters_usage_popup(self.root)
+        self.write_changes_to_intermediate_parameter_file()
+        selected_params: ParDict = self.parameter_editor_table.get_upload_selected_params(self.gui_complexity)
+        precondition_payload: dict[str, object] = dict(selected_params)
+        if not self.parameter_editor.ensure_upload_preconditions(precondition_payload, self.ui.show_warning):
+            return
+
+        if self.upload_selected_params(selected_params):
+            self._continue_to_analyse()
+            self.repopulate_parameter_table()
+
+    def on_upload_selected_click(self) -> None:
+        if self.navigation_lock.locked:
+            return
+        if isinstance(self.root, tk.Tk) and UsagePopupWindow.should_display("only_changed_get_uploaded"):
+            only_upload_changed_parameters_usage_popup(self.root)
+        self.write_changes_to_intermediate_parameter_file()
+        selected_params: ParDict = self.parameter_editor_table.get_upload_selected_params(self.gui_complexity)
+        precondition_payload: dict[str, object] = dict(selected_params)
+        if not self.parameter_editor.ensure_upload_preconditions(precondition_payload, self.ui.show_warning):
+            self.on_skip_click()
+            return
+
+        if self.upload_selected_params(selected_params):
+            self._continue_to_analyse()
+            # Delete the parameter table and create a new one with the next file if available
+            self.on_skip_click()
+
+    def _continue_to_analyse(self) -> None:
+        if not self._log_report_return_pending:
+            return
+        self._log_report_return_pending = False
+        if self._log_availability_report_window is not None and self.ui.ask_yesno(
+            _("Continue Log availability Review"),
+            _("Parameters uploaded. Return to the log availability report to continue?"),
+        ):
+            self._log_availability_report_window.root.deiconify()
+            self._log_availability_report_window.root.lift()
+            self._log_availability_report_window.root.focus_force()
+
+    # This function can recurse multiple times if there is an upload error
+
+    def upload_selected_params(self, selected_params: dict) -> bool:
+        return self._upload_params(selected_params, self.parameter_editor.upload_selected_params_workflow)
+
+    def upload_external_params(self, selected_params: dict) -> bool:
+        """Upload parameters without recording progress for the current AMC configuration step."""
+        return self._upload_params(selected_params, self.parameter_editor.upload_external_params_workflow)
+
+    @_with_fc_operation
+    def _upload_params(self, selected_params: dict, upload_callback: Callable[..., bool]) -> bool:  # type: ignore[misc]
+        """Run a parameter upload callback with shared progress and error handling."""
+        if self.navigation_lock.locked:
+            return False
+        resume_plugin = self._pause_plugin_receiver()
+        upload_owner = object()
+        self.navigation_lock.acquire(upload_owner)
+        try:
+            return self.ui.upload_params_with_progress(
+                self.root,
+                upload_callback,
+                selected_params,
+            )
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            self.ui.show_error(_("Upload Error"), f"{_('Failed to upload parameters:')} {e}")
+            logging_exception("Parameter upload failed")
+            return False
+        finally:
+            self.navigation_lock.release(upload_owner)
+            resume_plugin()
+
+    @_with_fc_operation
+    def on_download_bin_logs_click(self) -> None:
+        """Open the modal window for browsing and downloading FC log files."""
+        existing_window = getattr(self, "_file_browser_window", None)
+        if existing_window is not None:
+            try:
+                if existing_window.root.winfo_exists():
+                    existing_window.root.lift()
+                    existing_window.root.focus_force()
+                    return
+            except tk.TclError:
+                self._file_browser_window = None
+
+        if self.navigation_lock.locked:
+            return
+        resume_plugin = ParameterEditorWindow._pause_plugin_receiver(self)
+        browser_owner = object()
+        self.navigation_lock.acquire(browser_owner)
+        recovery = self._connection_recovery
+        release_access = recovery.acquire_operation() if recovery is not None else lambda: None
+
+        def on_browser_closed() -> None:
+            self._file_browser_window = None
+            self.navigation_lock.release(browser_owner)
+            try:
+                resume_plugin()
+            finally:
+                release_access()
+
+        try:
+            download_window = FileBrowserWindow(self.root, self.parameter_editor, self.ui)
+            self._file_browser_window = download_window
+            download_window.set_closed_callback(on_browser_closed)
+        except Exception:
+            on_browser_closed()
+            raise
+
+    def _pause_plugin_receiver(
+        self, *, reason: PluginPauseReason = PluginPauseReason.EXCLUSIVE_OPERATION
+    ) -> Callable[[], None]:
+        """Pause the receiver, recovering on failure, and return an idempotent, owner-checked resume callback."""
+        plugin_view = getattr(self, "current_plugin_view", None)
+        resume_plugin: Callable[[], None] | None = None
+
+        def resume_receiver() -> None:
+            nonlocal resume_plugin
+            callback, resume_plugin = resume_plugin, None
+            if (
+                plugin_view is not None
+                and callback is not None
+                and self.current_plugin_view is plugin_view
+                and self.root.winfo_exists()
+            ):
+                callback()
+
+        try:
+            lifecycle = resolve_plugin_lifecycle(plugin_view, reason)
+            if lifecycle is not None:
+                suspend, resume_plugin = lifecycle
+                suspend()
+        except Exception:
+            resume_receiver()
+            raise
+
+        return resume_receiver
+
+    @_with_fc_operation
+    def on_fc_banner_click(self) -> None:
+        """
+        Display diagnostics with plugin receivers paused until the popup closes.
+
+        Prefer paired on_suspend/on_resume hooks for state-preserving pauses.
+        Legacy views use their hide/show hooks.
+        """
+        if self.navigation_lock.locked:
+            return
+        browser_window = getattr(self, "_file_browser_window", None)
+        if browser_window is not None:
+            try:
+                if browser_window.root.winfo_exists():
+                    self.ui.show_error(
+                        _("File browser is open"),
+                        _("Close the flight-controller file browser before opening diagnostics."),
+                    )
+                    return
+            except tk.TclError:
+                self._file_browser_window = None
+        resume_plugin = ParameterEditorWindow._pause_plugin_receiver(self)
+        try:
+            banner_window = FlightControllerBannerWindow(
+                self.root,
+                self.parameter_editor.get_fc_banner_text(),
+                self.parameter_editor.get_fc_status_text(),
+                self.parameter_editor.fc_parameters,
+                status_text_provider=self.parameter_editor.poll_fc_status_text,
+                navigation_lock=self.navigation_lock,
+            )
+            self.root.wait_window(banner_window.root)
+        finally:
+            resume_plugin()
+
+    def on_zip_vehicle_for_forum_help_click(self) -> None:
+        """Handle the zip vehicle for forum help button click."""
+        if self.navigation_lock.locked:
+            return
+        self.parameter_editor.create_forum_help_zip_workflow(
+            show_error=self.ui.show_error,
+            show_info=self.ui.show_info,
+        )
+
+    def _update_skip_button_state(self) -> None:
+        """Update the skip button state based on whether the current configuration step is optional."""
+        if self.navigation_lock.locked:
+            return
+        if hasattr(self, "skip_button"):
+            skip_button_state = (
+                "normal"
+                if self.gui_complexity != "simple"
+                or self.parameter_editor.is_configuration_step_optional()
+                or not self.parameter_editor.is_fc_connected
+                else "disabled"
+            )
+            self.skip_button.configure(state=skip_button_state)
+
+    def _update_previous_button_state(self) -> None:
+        """Enable the previous button when an earlier parameter file is available."""
+        if self.navigation_lock.locked:
+            return
+        if not hasattr(self, "previous_button"):
+            return
+        previous_file = self.parameter_editor.get_previous_non_optional_file(
+            current_file=self.file_selection_combobox.get(), gui_complexity=self.gui_complexity
+        )
+        self.previous_button.configure(state="normal" if previous_file is not None else "disabled")
+
+    def on_previous_click(self, _event: Union[tk.Event, None] = None) -> None:  # noqa: UP007
+        """Select the preceding parameter file, saving any pending edits first."""
+        if self.navigation_lock.locked:
+            return
+        previous_file = self.parameter_editor.get_previous_non_optional_file(
+            current_file=self.file_selection_combobox.get(), gui_complexity=self.gui_complexity
+        )
+        if previous_file is None:
+            return
+
+        self.write_changes_to_intermediate_parameter_file()
+        self.file_selection_combobox.set(previous_file)
+        self.on_param_file_combobox_change(None)
+
+    def on_skip_click(self, _event: Union[tk.Event, None] = None) -> None:  # noqa: UP007
+        if self.navigation_lock.locked:
+            return
+        self.write_changes_to_intermediate_parameter_file()
+
+        # Use ParameterEditor to get the next non-optional file
+        next_file = self.parameter_editor.get_next_non_optional_file(current_file=None, gui_complexity=self.gui_complexity)
+
+        if next_file is None:
+            # No more files to process, write summary and close
+            self.parameter_editor.write_summary_files_workflow(
+                show_info=self.ui.show_info,
+                ask_confirmation=self.ui.ask_yesno,
+            )
+            # Close the application and the connection
+            self.close_connection_and_quit()
+            return
+
+        # Update the Combobox selection to the next file
+        self.file_selection_combobox.set(next_file)
+        # Trigger the combobox change event to update the table
+        self.on_param_file_combobox_change(None)
+
+    def write_changes_to_intermediate_parameter_file(self) -> None:
+        self.parameter_editor.handle_write_changes_workflow(
+            self.annotate_params_into_files.get(),
+            self.ui.ask_yesno,
+        )
+
+    @_with_fc_operation
+    def reset_all_parameters_to_default(self) -> bool:
+        """Reset all flight-controller parameters to defaults with a progress window."""
+        if self.navigation_lock.locked:
+            return False
+        resume_plugin = self._pause_plugin_receiver()
+        reset_owner = object()
+        self.navigation_lock.acquire(reset_owner)
+        try:
+            success = self.ui.reset_all_parameters_to_default_with_progress(
+                self.root, self.parameter_editor.reset_all_parameters_to_default
+            )
+            if success:
+                self.repopulate_parameter_table()
+            return success
+        finally:
+            self.navigation_lock.release(reset_owner)
+            resume_plugin()
+
+    def close_connection_and_quit(self) -> None:
+        if self._configured_upload_active:
+            self._close_after_configured_upload = True
+            return
+        if self._close_pending:
+            return
+        self._close_pending = True
+        self._finish_pending_close()
+
+    def _finish_pending_close(self) -> None:
+        """Wait for recovery through one retry chain, then offer to save once."""
+        if not self._stop_connection_monitor():
+            self._show_connection_status(_("Closing… Waiting for flight-controller recovery to stop."))
+            self.root.after(50, self._finish_pending_close)
+            return
+        self._commit_focused_edit_and_offer_save()
+        self.root.quit()  # Then stop the Tkinter event loop
+
+    def on_edit_vehicle_components_click(self) -> None:
+        """Close this window and request the standalone component editor."""
+        if self.navigation_lock.locked:
+            return
+        if getattr(self, "_log_analysis_running", False):
+            self.ui.show_error(
+                _("Log analysis is running"),
+                _("Wait for the flight log analysis to finish before editing vehicle components."),
+            )
+            return
+
+        browser_window = getattr(self, "_file_browser_window", None)
+        if browser_window is not None:
+            try:
+                if browser_window.root.winfo_exists():
+                    self.ui.show_error(
+                        _("File browser is open"),
+                        _("Close the flight-controller file browser before editing vehicle components."),
+                    )
+                    return
+            except tk.TclError:
+                self._file_browser_window = None
+
+        self._commit_focused_edit_and_offer_save()
+        self._requested_action = ParameterEditorAction.EDIT_COMPONENTS
+        self._stop_connection_monitor()
+        self._cleanup_plugin_views()
+        self.root.destroy()
+
+    def _commit_focused_edit_and_offer_save(self) -> None:
+        """Commit the focused widget and offer to save changes in the current step."""
+        self._commit_focused_parameter_edit()
+        self.write_changes_to_intermediate_parameter_file()
+
+    def _commit_focused_parameter_edit(self) -> None:
+        """Commit a pending edit even when Tk focus belongs to an unregistered or destroyed popup."""
+        # Native Tk dialogs and transient widgets can have Tcl paths without a
+        # Python widget. Losing their focus must not prevent saving or closing.
+        with contextlib.suppress(KeyError, tk.TclError):
+            focused_widget = self.parameter_editor_table.view_port.focus_get()
+            if focused_widget is not None:
+                focused_widget.event_generate("<FocusOut>", when="now")
+
+    @staticmethod
+    def add_argparse_arguments(parser: ArgumentParser) -> ArgumentParser:
+        """Add parameter editor specific arguments to the parser."""
+        parser.add_argument(
+            "--export-fc-params-missing-or-different",
+            action="store_true",
+            help=_("Export FC params that are missing or different in the configuration steps. Default is %(default)s"),
+        )
+        return parser
+
+
+def argument_parser() -> Namespace:  # pragma: no cover
+    """
+    Parses command-line arguments for the script.
+
+    This function sets up an argument parser to handle the command-line arguments for the script.
+
+    Returns:
+    argparse.Namespace: An object containing the parsed arguments.
+
+    """
+    parser = ArgumentParser(
+        description=_(
+            "A GUI for editing ArduPilot param files. "
+            "Not to be used directly, but through the main ArduPilot methodic configurator script."
+        )
+    )
+    parser = FlightController.add_argparse_arguments(parser)
+    parser = LocalFilesystem.add_argparse_arguments(parser)
+    parser = ParameterEditorWindow.add_argparse_arguments(parser)
+    return add_common_arguments(parser).parse_args()
+
+
+def run_standalone_parameter_editor(
+    flight_controller: FlightController,
+    local_filesystem: LocalFilesystem,
+    start_file: str = "04_board_orientation.param",
+) -> None:
+    """Run the standalone parameter and component editor workflow."""
+    current_file = start_file
+    while True:
+        parameter_editor = ParameterEditor(current_file, flight_controller, local_filesystem)
+        action = ParameterEditorWindow(parameter_editor).run()
+        if action is ParameterEditorAction.FINISHED:
+            return
+
+        current_file = parameter_editor.current_file
+        component_editor = ComponentEditorWindow(__version__, local_filesystem, flight_controller.fc_parameters)
+        component_editor.set_vehicle_type_and_version(
+            local_filesystem.vehicle_type,
+            flight_controller.info.flight_sw_version_and_type,
+        )
+        component_editor.populate_frames()
+        component_editor.set_fc_manufacturer(flight_controller.info.vendor)
+        component_editor.set_fc_model(flight_controller.info.firmware_type)
+        component_editor.set_mcu_series(flight_controller.info.mcu_series)
+        component_editor.root.mainloop()
+
+
+if __name__ == "__main__":  # pragma: no cover
+    args = argument_parser()
+
+    logging_basicConfig(level=args.loglevel, format="%(asctime)s - %(levelname)s - %(message)s")
+
+    fc = FlightController(reboot_time=args.reboot_time, baudrate=args.baudrate)
+    filesystem = LocalFilesystem(
+        args.vehicle_dir, args.vehicle_type, "", args.allow_editing_template_files, args.save_component_to_system_templates
+    )
+    run_standalone_parameter_editor(fc, filesystem)

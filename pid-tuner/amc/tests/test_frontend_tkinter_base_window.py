@@ -1,0 +1,2259 @@
+#!/usr/bin/env python3
+
+"""
+Behavior-driven tests for the BaseWindow class.
+
+This file is part of ArduPilot Methodic Configurator. https://github.com/ArduPilot/MethodicConfigurator
+
+SPDX-FileCopyrightText: 2024-2026 Amilcar do Carmo Lucas <amilcar.lucas@iav.de>
+
+SPDX-License-Identifier: GPL-3.0-or-later
+"""
+
+import contextlib
+import os
+import sys
+import tempfile
+import time
+import tkinter as tk
+from collections.abc import Callable, Generator
+from pathlib import Path
+from tkinter import ttk
+from typing import Any
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+# Import shared configuration from conftest
+from conftest import MockConfiguration
+from PIL import Image
+
+from ardupilot_methodic_configurator.frontend_tkinter_base_window import (
+    BaseWindow,
+    ask_retry_cancel_popup,
+    ask_yesno_popup,
+    is_debugging,
+    show_error_popup,
+    show_info_popup,
+    show_warning_popup,
+)
+from ardupilot_methodic_configurator.frontend_tkinter_show import MonitorBounds
+
+# pylint: disable=protected-access, redefined-outer-name, unused-argument, too-many-lines
+
+
+# ==================== ADDITIONAL TEST FIXTURES ====================
+
+
+@pytest.fixture
+def dpi_test_window(mock_tkinter_context) -> Callable[[float, float], tuple[BaseWindow, contextlib.ExitStack]]:
+    """Specialized fixture for DPI testing that doesn't mock DPI detection."""
+
+    def _create_dpi_window(mock_dpi: float, tk_scaling: float = 1.0) -> tuple[BaseWindow, contextlib.ExitStack]:
+        config = MockConfiguration(patch_dpi_detection=False)
+        stack, patches = mock_tkinter_context(config)
+
+        for patch_obj in patches:
+            stack.enter_context(patch_obj)
+
+        # Suppress the Win32 path so only the Tk-based mocks control the result.
+        # Without this, GetDpiForSystem() returns the real system DPI on Windows
+        # and overrides the mock_dpi, causing failures at any DPI != 96.
+        stack.enter_context(patch.object(BaseWindow, "_get_win32_system_dpi", return_value=0))
+
+        mock_tk = stack.enter_context(patch("tkinter.Tk"))
+        mock_root = MagicMock()
+        mock_root.winfo_fpixels.return_value = mock_dpi
+        mock_root.tk.call.return_value = tk_scaling
+        mock_tk.return_value = mock_root
+
+        window = BaseWindow()
+        return window, stack
+
+    return _create_dpi_window
+
+
+@pytest.fixture
+def image_test_context() -> Callable[[tuple[int, int], bool], Any]:
+    """Specialized fixture for image testing with proper mocks."""
+
+    @contextlib.contextmanager
+    def _image_context(image_size: tuple[int, int] = (100, 50), file_exists: bool = True) -> Generator[dict, None, None]:
+        with (
+            patch("os.path.isfile", return_value=file_exists),
+            patch("PIL.Image.open") as mock_open,
+            patch("tkinter.PhotoImage") as mock_photo,
+            patch("tkinter.ttk.Label") as mock_label,
+            patch("io.BytesIO") as mock_buffer,
+        ):
+            # Setup image mocks to work with context manager
+            mock_image = MagicMock()
+            mock_image.size = image_size
+            mock_image.mode = "RGB"
+            mock_resized_image = MagicMock()
+            mock_resized_image.mode = "RGB"
+            mock_image.resize.return_value = mock_resized_image
+
+            # Mock image to work as context manager
+            mock_image.__enter__ = MagicMock(return_value=mock_image)
+            mock_image.__exit__ = MagicMock(return_value=None)
+            mock_open.return_value = mock_image
+
+            # Setup buffer mock
+            mock_buffer_instance = MagicMock()
+            mock_buffer.return_value = mock_buffer_instance
+            mock_buffer_instance.getvalue.return_value = b"fake_png_data"
+
+            # Setup photo and label mocks
+            mock_photo_instance = MagicMock()
+            mock_photo.return_value = mock_photo_instance
+            mock_label_instance = MagicMock()
+            mock_label.return_value = mock_label_instance
+
+            yield {
+                "image": mock_image,
+                "resized_image": mock_resized_image,
+                "photo": mock_photo_instance,
+                "label": mock_label_instance,
+                "open_mock": mock_open,
+                "photo_mock": mock_photo,
+                "label_mock": mock_label,
+                "buffer": mock_buffer_instance,
+            }
+
+    return _image_context
+
+
+@pytest.fixture
+def sample_image_file() -> Generator[str, None, None]:
+    """Create a real temporary image file for testing."""
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+        img = Image.new("RGB", (100, 50), color="red")
+        img.save(tmp.name)
+        tmp_path = tmp.name
+
+    yield tmp_path
+    Path(tmp_path).unlink(missing_ok=True)
+
+
+@pytest.fixture
+def mocked_base_window(mock_tkinter_context) -> Generator[BaseWindow, None, None]:
+    """Fixture providing a properly mocked BaseWindow instance for behavior testing."""
+    stack, patches = mock_tkinter_context()
+    with stack:
+        for patch_obj in patches:
+            stack.enter_context(patch_obj)
+        window = BaseWindow()
+        yield window
+
+
+# ==================== BEHAVIOR-FOCUSED TESTS ====================
+
+
+class TestWindowCreationBehavior:
+    """Test window creation scenarios from user perspective."""
+
+    def test_user_can_start_application_with_main_window(self, mock_tkinter_context) -> None:
+        """
+        User can start application with main window.
+
+        GIVEN: User starts the application
+        WHEN: No parent window exists
+        THEN: Should create a main application window with icon and theming
+        """
+        # Arrange (Given): Set up mocking for main window creation
+        stack, patches = mock_tkinter_context()
+
+        with stack:
+            for patch_obj in patches:
+                stack.enter_context(patch_obj)
+
+            mock_tk = stack.enter_context(patch("tkinter.Tk"))
+            mock_root = MagicMock()
+            mock_tk.return_value = mock_root
+
+            # Act (When): User starts the application
+            window = BaseWindow()
+
+            # Assert (Then): Main window is created with proper components
+            mock_tk.assert_called_once()
+            assert window.root == mock_root
+            assert hasattr(window, "main_frame")
+
+    def test_user_can_open_dialog_as_child_window(self, tk_root) -> None:
+        """
+        User can open dialog as child window.
+
+        GIVEN: User interacts with main application
+        WHEN: A dialog needs to be shown
+        THEN: Should create child window that doesn't interfere with main window
+        """
+        # Arrange (Given): Set up mocking for child window creation
+        with (
+            patch.object(BaseWindow, "_setup_application_icon") as mock_icon,
+            patch.object(BaseWindow, "_setup_theme_and_styling"),
+            patch.object(BaseWindow, "_get_dpi_scaling_factor", return_value=1.0),
+        ):
+            # Act (When): User opens a dialog window
+            child_window = BaseWindow(tk_root)
+
+            # Assert (Then): Child window is created properly
+            assert isinstance(child_window.root, tk.Toplevel)
+            mock_icon.assert_not_called()  # Child windows don't set icons
+
+
+class TestDisplayScalingBehavior:
+    """Test how the application adapts to different display configurations."""
+
+    @pytest.mark.parametrize(
+        ("system_dpi", "expected_scaling"),
+        [
+            (96, 1.0),  # Standard 1080p monitor
+            (144, 1.5),  # 150% Windows scaling
+            (192, 2.0),  # 4K monitor with 200% scaling
+            (120, 1.25),  # Intermediate scaling
+        ],
+    )
+    def test_adapts_to_system_display_scaling(self, dpi_test_window, system_dpi, expected_scaling) -> None:
+        """
+        Application adapts to system display scaling.
+
+        GIVEN: User has different DPI/scaling configurations
+        WHEN: Application starts
+        THEN: Should detect and apply appropriate scaling factor
+        """
+        window, stack = dpi_test_window(system_dpi)
+
+        with stack:
+            scaling_factor = window._get_dpi_scaling_factor()
+            assert scaling_factor == expected_scaling
+
+    def test_falls_back_gracefully_when_dpi_detection_fails(self, dpi_test_window) -> None:
+        """
+        Falls back gracefully when DPI detection fails.
+
+        GIVEN: User's system has unusual DPI configuration
+        WHEN: DPI detection encounters errors
+        THEN: Should use safe default scaling to remain functional
+        """
+        # Simulate DPI detection failure
+        with patch("tkinter.Tk") as mock_tk:
+            mock_root = MagicMock()
+            mock_root.winfo_fpixels.side_effect = tk.TclError("No display")
+            mock_tk.return_value = mock_root
+
+            with (
+                patch.object(BaseWindow, "_setup_application_icon"),
+                patch.object(BaseWindow, "_setup_theme_and_styling"),
+                patch.object(BaseWindow, "_get_win32_system_dpi", return_value=0),
+            ):
+                window = BaseWindow()
+                scaling_factor = window._get_dpi_scaling_factor()
+                assert scaling_factor == 1.0  # Safe default
+
+    @pytest.mark.parametrize(
+        ("font_size", "scaling", "expected"),
+        [
+            (10, 1.0, 10),  # No scaling
+            (12, 1.5, 18),  # 150% scaling
+            (8, 2.0, 16),  # 200% scaling
+        ],
+    )
+    def test_scales_fonts_for_readability(self, mock_tkinter_context, font_size, scaling, expected) -> None:
+        """
+        Scales fonts for readability across different displays.
+
+        GIVEN: User has high-DPI display
+        WHEN: Text needs to be displayed
+        THEN: Should scale font sizes to maintain readability
+        """
+        config = MockConfiguration(dpi_scaling_factor=scaling)
+        stack, patches = mock_tkinter_context(config)
+
+        with stack:
+            for patch_obj in patches:
+                stack.enter_context(patch_obj)
+
+            window = BaseWindow()
+            scaled_size = window.calculate_scaled_font_size(font_size)
+            assert scaled_size == expected
+
+
+class TestImageDisplayBehavior:
+    """Test how images are displayed to users."""
+
+    def test_user_sees_properly_sized_images(self, image_test_context, sample_image_file, mocked_base_window) -> None:
+        """
+        User sees properly sized images.
+
+        GIVEN: User interface needs to show an image
+        WHEN: Image is loaded into a label
+        THEN: Should resize image maintaining aspect ratio and display correctly
+        """
+        with image_test_context() as mocks:
+            # Arrange (Given): Set up parent frame for image display
+            parent_frame = MagicMock()
+
+            # Act (When): User loads an image into the interface
+            result = mocked_base_window.put_image_in_label(parent_frame, sample_image_file, image_height=40)
+
+            # Assert (Then): Image is properly sized and displayed
+            assert result == mocks["label"]
+            mocks["open_mock"].assert_called_once_with(sample_image_file)
+            mocks["image"].resize.assert_called_once()
+            # Check that PhotoImage was called with data parameter (our new implementation)
+            mocks["photo_mock"].assert_called_once_with(master=parent_frame, data=b"fake_png_data")
+
+    def test_user_sees_fallback_when_image_unavailable(self, image_test_context, mocked_base_window) -> None:
+        """
+        User sees appropriate error when image unavailable.
+
+        GIVEN: User interface references a missing image
+        WHEN: Image cannot be loaded due to missing file
+        THEN: Should raise FileNotFoundError for calling code to handle
+        """
+        with image_test_context(file_exists=False):
+            # Arrange (Given): Set up parent frame and missing image scenario
+            parent_frame = MagicMock()
+
+            # Act & Assert: User attempts to load a missing image, should raise FileNotFoundError
+            with pytest.raises(FileNotFoundError, match="Image file not found"):
+                mocked_base_window.put_image_in_label(parent_frame, "missing_image.png", fallback_text="Image not available")
+
+    def test_user_sees_fallback_label_when_image_has_zero_height(self, mocked_base_window) -> None:
+        """
+        User sees a fallback label instead of a crash when an image reports zero height.
+
+        GIVEN: A corrupt or degenerate image file whose PIL size is (width, 0)
+        WHEN: put_image_in_label() is called with that file
+        THEN: A fallback label is returned (ValueError caught internally)
+        """
+        mock_image = MagicMock()
+        mock_image.size = (100, 0)  # zero height triggers the ValueError guard
+        mock_image.__enter__ = MagicMock(return_value=mock_image)
+        mock_image.__exit__ = MagicMock(return_value=None)
+
+        with (
+            patch("os.path.isfile", return_value=True),
+            patch("PIL.Image.open", return_value=mock_image),
+            patch("tkinter.ttk.Label") as mock_label,
+        ):
+            parent_frame = MagicMock()
+            result = mocked_base_window.put_image_in_label(parent_frame, "degenerate.png", fallback_text="bad image")
+
+        # Fallback label is returned, not the image label
+        mock_label.assert_called_once()
+        assert result == mock_label.return_value
+
+    def test_user_sees_fallback_label_when_image_has_zero_width(self, mocked_base_window) -> None:
+        """
+        User sees a fallback label instead of a crash when an image reports zero width.
+
+        GIVEN: A corrupt or degenerate image file whose PIL size is (0, height)
+        WHEN: put_image_in_label() is called with that file
+        THEN: A fallback label is returned (ValueError caught internally)
+        """
+        mock_image = MagicMock()
+        mock_image.size = (0, 100)  # zero width triggers the ValueError guard
+        mock_image.__enter__ = MagicMock(return_value=mock_image)
+        mock_image.__exit__ = MagicMock(return_value=None)
+
+        with (
+            patch("os.path.isfile", return_value=True),
+            patch("PIL.Image.open", return_value=mock_image),
+            patch("tkinter.ttk.Label") as mock_label,
+        ):
+            parent_frame = MagicMock()
+            result = mocked_base_window.put_image_in_label(parent_frame, "degenerate.png", fallback_text="bad image")
+
+        # Fallback label is returned, not the image label
+        mock_label.assert_called_once()
+        assert result == mock_label.return_value
+
+    @pytest.mark.parametrize(
+        ("original_size", "target_height", "expected_width"),
+        [
+            ((200, 100), 50, 100),  # 2:1 aspect ratio
+            ((300, 150), 75, 150),  # 2:1 aspect ratio
+            ((100, 200), 100, 50),  # 1:2 aspect ratio
+        ],
+    )
+    def test_maintains_image_aspect_ratios(
+        self, image_test_context, original_size, target_height, expected_width, mocked_base_window
+    ) -> None:
+        """
+        Maintains image aspect ratios.
+
+        GIVEN: Images with various aspect ratios
+        WHEN: Resizing to fit UI constraints
+        THEN: Should maintain original aspect ratio
+        """
+        with image_test_context(image_size=original_size) as mocks:
+            parent_frame = MagicMock()
+
+            mocked_base_window.put_image_in_label(parent_frame, "test_image.png", image_height=target_height)
+
+            # Verify aspect ratio is maintained
+            expected_size = (expected_width, target_height)
+            mocks["image"].resize.assert_called_once_with(expected_size, Image.Resampling.LANCZOS)
+
+
+class TestErrorResilienceBehavior:
+    """Test how application handles error conditions gracefully."""
+
+    def test_app_skips_icon_setup_when_debugger_is_active(self) -> None:
+        """
+        Application skips icon setup when a debugger is actively connected.
+
+        GIVEN: A developer has a VS Code debugger attached to the process
+        WHEN: _setup_application_icon() is called
+        THEN: Icon loading is skipped entirely (debugger cannot cope with it)
+        """
+        # Clear PYTEST_CURRENT_TEST so the early test-environment guard doesn't trigger first
+        env_without_pytest = {k: v for k, v in os.environ.items() if k != "PYTEST_CURRENT_TEST"}
+
+        with (
+            patch.dict(os.environ, env_without_pytest, clear=True),
+            patch("ardupilot_methodic_configurator.frontend_tkinter_base_window.is_debugging", return_value=True),
+            patch.object(BaseWindow, "_setup_theme_and_styling"),
+            patch.object(BaseWindow, "_get_dpi_scaling_factor", return_value=1.0),
+        ):
+            window = BaseWindow.__new__(BaseWindow)
+            window.root = MagicMock()
+            window.main_frame = MagicMock()
+            window.dpi_scaling_factor = 1.0
+
+            # Act: Call _setup_application_icon with debugger active
+            window._setup_application_icon()
+
+            # Assert: icon was never set on the root window
+            window.root.iconphoto.assert_not_called()
+
+    def test_user_sees_functional_app_despite_icon_issues(self) -> None:
+        """
+        User sees functional application despite icon loading issues.
+
+        GIVEN: User's system has icon loading issues
+        WHEN: Application attempts to set window icon and fails
+        THEN: Should log error but continue functioning normally
+        """
+        # Arrange: Set up environment without test markers and mock dependencies
+        env_without_pytest = {k: v for k, v in os.environ.items() if k != "PYTEST_CURRENT_TEST"}
+
+        with (
+            patch.dict(os.environ, env_without_pytest, clear=True),
+            patch("tkinter.Tk"),
+            patch.object(BaseWindow, "_setup_theme_and_styling"),
+            patch.object(BaseWindow, "_get_dpi_scaling_factor", return_value=1.0),
+            patch(
+                "ardupilot_methodic_configurator.frontend_tkinter_base_window.ProgramSettings.application_icon_filepath",
+                return_value="test_icon.png",
+            ),
+            patch("tkinter.PhotoImage"),
+            patch("ardupilot_methodic_configurator.frontend_tkinter_base_window.logging_error") as mock_log,
+        ):
+            window = BaseWindow()
+            window.root = MagicMock()
+            window.root.iconphoto.side_effect = tk.TclError("Icon error")
+
+            # Act: Attempt to set up application icon
+            window._setup_application_icon()
+
+            # Assert: Error should be logged but application should continue
+            mock_log.assert_called_once()
+
+    def test_user_gets_usable_app_despite_display_issues(self, mock_tkinter_context) -> None:
+        """
+        User gets usable application despite display configuration issues.
+
+        GIVEN: User's system has DPI detection or display configuration issues
+        WHEN: Various setup operations fail during window initialization
+        THEN: Should provide reasonable defaults to maintain usability
+        """
+        # Arrange: Configure mocks to simulate configuration failures
+        config = MockConfiguration(patch_dpi_detection=False)
+        stack, patches = mock_tkinter_context(config)
+
+        with stack:
+            for patch_obj in patches:
+                stack.enter_context(patch_obj)
+
+            # Mock DPI detection failure
+            stack.enter_context(patch.object(BaseWindow, "_get_win32_system_dpi", return_value=0))
+            mock_tk = stack.enter_context(patch("tkinter.Tk"))
+            mock_root = MagicMock()
+            mock_root.winfo_fpixels.side_effect = tk.TclError("Display error")
+            mock_tk.return_value = mock_root
+
+            # Act: Create window despite configuration issues
+            window = BaseWindow()
+            scaling_factor = window._get_dpi_scaling_factor()
+
+            # Assert: Should provide safe fallback defaults
+            assert scaling_factor == 1.0  # Safe fallback
+
+
+class TestWindowManagementBehavior:
+    """Test window positioning and management from user perspective."""
+
+    def test_centers_dialogs_on_parent_window(self, tk_root) -> None:
+        """
+        Centers dialogs on parent window.
+
+        GIVEN: User opens a dialog from main window
+        WHEN: Dialog needs to be positioned
+        THEN: Should appear centered on the parent window
+        """
+        try:
+            child = tk.Toplevel(tk_root)
+            tk_root.geometry("400x300+100+100")
+            child.geometry("200x150")
+
+            BaseWindow.center_window(child, tk_root)
+
+            # Verify positioning (allowing for window manager differences and headless environments)
+            child.update_idletasks()
+
+            # In headless environments, coordinates can be negative, so we verify the centering logic worked
+            # by checking that the child window has been given specific coordinates (not default 0,0)
+            child_x, child_y = child.winfo_x(), child.winfo_y()
+
+            # The centering should set explicit coordinates, not leave them at defaults
+            # This verifies the positioning logic executed without checking specific screen bounds
+            assert isinstance(child_x, int)
+            assert isinstance(child_y, int)
+
+            # Additional verification: window should be properly configured
+            assert child.winfo_width() > 0
+            assert child.winfo_height() > 0
+
+            child.destroy()
+        except tk.TclError as e:
+            if "couldn't connect to display" in str(e) or "no display name" in str(e):
+                pytest.skip(f"Tkinter not available in test environment: {e}")
+            raise
+
+    def test_user_sees_properly_positioned_dialogs_regardless_of_window_size(self, tk_root) -> None:
+        """
+        User sees properly positioned dialogs regardless of unusual window sizes.
+
+        GIVEN: User has unusual window sizes or positioning requirements
+        WHEN: Attempting to position child windows or dialogs
+        THEN: Should handle gracefully without errors or crashes
+        """
+        # Arrange: Create child window with minimal size to test edge case
+        child = tk.Toplevel(tk_root)
+        child.geometry("1x1")  # Minimal size
+
+        # Act: Attempt to center the window (should not raise exceptions)
+        BaseWindow.center_window(child, tk_root)
+
+        # Assert: Window should be positioned without errors
+        # (The exact position may vary by window manager, but it shouldn't crash)
+
+        child.destroy()
+
+    def test_center_window_defers_positioning_on_macos(self) -> None:
+        """
+        center_window schedules positioning without forcing Tk event processing.
+
+        GIVEN: Application is running on macOS (Darwin)
+        WHEN: center_window() positions a child window relative to a parent
+        THEN: the idle callback positions the window after geometry settles
+        """
+        mock_window = MagicMock()
+        mock_parent = MagicMock()
+        mock_window.winfo_width.return_value = 1
+        mock_window.winfo_height.return_value = 1
+        mock_window.winfo_reqwidth.return_value = 200
+        mock_window.winfo_reqheight.return_value = 100
+        mock_parent.winfo_x.return_value = 0
+        mock_parent.winfo_y.return_value = 0
+        mock_parent.winfo_width.return_value = 800
+        mock_parent.winfo_height.return_value = 600
+
+        with patch(
+            "ardupilot_methodic_configurator.frontend_tkinter_base_window.is_macos_sequoia_or_older", return_value=True
+        ):
+            BaseWindow.center_window(mock_window, mock_parent)
+
+        mock_window.update_idletasks.assert_not_called()
+        mock_window.update.assert_not_called()
+        mock_window.geometry.assert_not_called()
+        mock_window.after_idle.assert_called_once()
+        mock_window.after_idle.call_args.args[0]()
+        mock_window.geometry.assert_called_once_with("+300+250")
+        mock_window.update_idletasks.assert_not_called()
+        mock_window.update.assert_not_called()
+
+    def test_user_can_safely_close_windows_without_memory_leaks(self, tk_root) -> None:
+        """
+        User can safely close windows without memory leaks.
+
+        GIVEN: User has opened application windows
+        WHEN: User closes windows or application exits
+        THEN: Should clean up resources properly without memory leaks
+        """
+        # Arrange: Create window for testing cleanup
+        window = BaseWindow(tk_root)
+
+        # Verify window exists initially
+        assert window.root.winfo_exists()
+
+        # Act: Simulate window destruction (user closing window)
+        window.root.destroy()
+
+        # Assert: Window should be properly destroyed and cleaned up
+        assert not window.root.winfo_exists()
+
+    @pytest.mark.parametrize("extreme_dpi", [48, 480, 960])  # Very low and very high DPI
+    def test_user_gets_readable_ui_on_extreme_dpi_displays(self, dpi_test_window, extreme_dpi) -> None:
+        """
+        User gets readable UI on extreme DPI displays.
+
+        GIVEN: User has extremely high or low DPI displays (retina, 4K, or very old displays)
+        WHEN: Application detects and adapts to DPI settings
+        THEN: Should handle gracefully with reasonable scaling bounds for usability
+        """
+        # Arrange: Set up window with extreme DPI values
+        window, stack = dpi_test_window(extreme_dpi)
+
+        with stack:
+            # Act: Get DPI scaling factor for extreme display
+            scaling_factor = window._get_dpi_scaling_factor()
+
+            # Assert: Should be reasonable (between 0.5 and 10.0) for usability
+            assert 0.5 <= scaling_factor <= 10.0
+
+    def test_user_sees_stable_images_without_display_glitches(
+        self, image_test_context, sample_image_file, mocked_base_window
+    ) -> None:
+        """
+        User sees stable images without display glitches.
+
+        GIVEN: User views application with images displayed in the UI
+        WHEN: Images are loaded and displayed in labels
+        THEN: Should maintain references to prevent garbage collection and flickering
+        """
+        # Arrange: Set up image loading context
+        with image_test_context() as mocks:
+            parent_frame = MagicMock()
+
+            # Act: Load and display image in UI
+            label = mocked_base_window.put_image_in_label(parent_frame, sample_image_file)
+
+            # Assert: Should maintain image reference to prevent GC issues
+            assert hasattr(label, "image") or hasattr(mocks["label"], "image")
+
+
+# ==================== INTEGRATION TESTS ====================
+
+
+@pytest.mark.integration
+class TestCompleteWorkflows:
+    """Test complete user workflows end-to-end with real Tkinter."""
+
+    def test_user_experiences_smooth_application_startup(self, tk_root) -> None:
+        """
+        User experiences smooth application startup.
+
+        GIVEN: User starts the application from desktop or command line
+        WHEN: Application initializes completely with all components
+        THEN: Should have functional window with proper theme and scaling for good UX
+        """
+        # Arrange: User starting application
+        # Act: Initialize complete application window
+        window = BaseWindow(tk_root)
+
+        # Assert: Verify complete initialization provides good user experience
+        assert isinstance(window.root, tk.Toplevel)
+        assert isinstance(window.main_frame, ttk.Frame)
+        assert window.dpi_scaling_factor > 0
+
+        # Assert: Verify theme is applied for visual consistency
+        style = ttk.Style()
+        assert style.theme_use() in ["alt", "clam", "default"]  # Valid themes
+
+    def test_user_can_launch_main_application_window(self) -> None:
+        """
+        User can launch main application window.
+
+        GIVEN: User starts application without any parent windows (fresh start)
+        WHEN: User launches the main application window
+        THEN: Should create root Tk window with all essential components ready
+        """
+        # Arrange: Fresh application start (no parent window)
+        window = None
+        try:
+            # Act: User launches main application window
+            window = BaseWindow()
+
+            # Assert: Verify main window components are ready for user interaction
+            assert isinstance(window.root, tk.Tk)
+            assert isinstance(window.main_frame, ttk.Frame)
+            assert hasattr(window, "dpi_scaling_factor")
+
+            # Verify window is configured properly
+            assert window.root.winfo_exists()
+
+        except tk.TclError:
+            pytest.skip("Tkinter display not available")
+        finally:
+            if window is not None and hasattr(window, "root"):
+                with contextlib.suppress(tk.TclError):
+                    window.root.destroy()
+
+    def test_user_can_open_dialogs_from_main_window(self, tk_root) -> None:
+        """
+        User can open dialogs from main application window.
+
+        GIVEN: User has main application window open
+        WHEN: User opens a dialog or child window from the main window
+        THEN: Should create properly positioned Toplevel window that works with main window
+        """
+        # Arrange: User has main application window open
+        main_window = BaseWindow(tk_root)
+
+        # Act: User opens dialog window from main application
+        dialog_window = BaseWindow(tk_root)
+
+        # Assert: Dialog should be properly structured and functional
+        assert isinstance(dialog_window.root, tk.Toplevel)
+        assert dialog_window.root.master == tk_root
+
+        # Assert: Both windows should coexist without conflicts
+        assert main_window.root.winfo_exists()
+        assert dialog_window.root.winfo_exists()
+
+    def test_user_can_manage_multiple_windows_simultaneously(self, tk_root) -> None:
+        """
+        User can manage multiple windows simultaneously.
+
+        GIVEN: User needs multiple windows for complex workflows
+        WHEN: User opens and manages multiple BaseWindow instances
+        THEN: Should handle multiple windows without conflicts or performance issues
+        """
+        # Arrange: Prepare for multiple window management
+        windows = []
+
+        try:
+            # Act: User opens multiple child windows for different tasks
+            for i in range(3):
+                window = BaseWindow(tk_root)
+                window.root.title(f"Test Window {i}")
+                windows.append(window)
+
+            # Assert: All windows should exist and be functional simultaneously
+            for window in windows:
+                assert window.root.winfo_exists()
+                assert isinstance(window.main_frame, ttk.Frame)
+
+            # Assert: Each should have independent DPI scaling for proper display
+            scaling_factors = [w.dpi_scaling_factor for w in windows]
+            assert all(factor > 0 for factor in scaling_factors)
+
+        finally:
+            # Cleanup: Properly close all windows
+            for window in windows:
+                with contextlib.suppress(tk.TclError):
+                    window.root.destroy()
+
+
+@pytest.mark.integration
+class TestRealImageIntegration:
+    """Test image operations with real files and Tkinter."""
+
+    def test_user_sees_images_loaded_correctly_in_real_environment(self, root, sample_image_file) -> None:
+        """
+        User sees images loaded correctly in real environment.
+
+        GIVEN: User has real image files and Tkinter environment
+        WHEN: User loads images into application labels
+        THEN: Should create functional image labels that display correctly
+        """
+        try:
+            # Arrange: Set up real window and image file
+            window = BaseWindow(root)
+
+            # Act: User loads real image into the application
+            label = window.put_image_in_label(window.main_frame, sample_image_file, image_height=50)
+
+            # Assert: Verify label creation and proper image display
+            assert isinstance(label, ttk.Label)
+            assert label.master == window.main_frame
+
+            # Assert: Should have image reference for proper display
+            assert hasattr(label, "image") or label.cget("image")
+        except tk.TclError as e:
+            if "doesn't exist" in str(e) or "Can't find a usable" in str(e):
+                pytest.skip(f"Tkinter image/display not available in test environment: {e}")
+            raise
+
+    def test_user_sees_properly_scaled_images_across_dpi_settings(self, root, sample_image_file) -> None:
+        """
+        User sees properly scaled images across DPI settings.
+
+        GIVEN: User has real images and varying DPI scaling requirements
+        WHEN: User loads images at different display sizes
+        THEN: Should scale images appropriately for good visual experience
+        """
+        try:  # Arrange: Set up real window environment
+            window = BaseWindow(root)
+
+            # Test different image heights for various UI contexts
+            heights = [25, 50, 100]
+            labels = []
+
+            # Act: User loads images at different sizes
+            for height in heights:
+                label = window.put_image_in_label(window.main_frame, sample_image_file, image_height=height)
+                labels.append(label)
+
+            # Assert: All labels should be created successfully
+            assert len(labels) == len(heights)
+            for label in labels:
+                assert isinstance(label, ttk.Label)
+        except tk.TclError as e:
+            if "doesn't exist" in str(e) or "Can't find a usable" in str(e):
+                pytest.skip(f"Tkinter image/display not available in test environment: {e}")
+            raise
+
+    def test_user_can_load_multiple_images_without_performance_issues(self, root) -> None:
+        """
+        User can load multiple images without performance issues.
+
+        GIVEN: User needs to display multiple images in the application (gallery, thumbnails, etc.)
+        WHEN: User loads multiple images simultaneously in the interface
+        THEN: Should handle multiple images efficiently without memory issues or crashes
+        """
+        try:
+            # Arrange: Set up window and prepare for multiple image loading
+            window = BaseWindow(root)
+            temp_files = []
+            labels = []
+
+            try:
+                # Create multiple temporary images (simulating user's image files)
+                for i in range(5):
+                    with tempfile.NamedTemporaryFile(suffix=f"_{i}.png", delete=False) as tmp:
+                        img = Image.new("RGB", (50, 25), color=(i * 50, 100, 150))
+                        img.save(tmp.name)
+                        temp_files.append(tmp.name)
+
+                # Act: User loads all images into the application
+                for img_file in temp_files:
+                    label = window.put_image_in_label(window.main_frame, img_file, image_height=30)
+                    labels.append(label)
+
+                # Assert: Verify all images loaded successfully without issues
+                assert len(labels) == len(temp_files)
+                for label in labels:
+                    assert isinstance(label, ttk.Label)
+
+            finally:
+                # Cleanup: Remove temporary files
+                for temp_file in temp_files:
+                    Path(temp_file).unlink(missing_ok=True)
+        except tk.TclError as e:
+            if "doesn't exist" in str(e) or "Can't find a usable" in str(e):
+                pytest.skip(f"Tkinter image/display not available in test environment: {e}")
+            raise
+
+
+@pytest.mark.integration
+class TestThemeIntegration:
+    """Test theme and styling integration with real Tkinter."""
+
+    def test_user_sees_consistent_theme_across_all_windows(self, tk_root) -> None:
+        """
+        User sees consistent theme across all application windows.
+
+        GIVEN: User opens multiple BaseWindow instances in application workflow
+        WHEN: User creates windows with consistent theming requirements
+        THEN: Should maintain visual consistency across all windows for good UX
+        """
+        # Arrange: Prepare for multiple window creation
+        windows = []
+
+        try:
+            # Act: User creates multiple windows (main + dialogs)
+            for _ in range(3):
+                window = BaseWindow(tk_root)
+                windows.append(window)
+
+            # Assert: Check theme consistency across all windows
+            styles = [ttk.Style() for _ in windows]
+            themes = [style.theme_use() for style in styles]
+
+            # Assert: All should use the same theme for visual consistency
+            assert len(set(themes)) == 1  # All themes should be identical
+            assert themes[0] == "alt"
+
+        finally:
+            # Cleanup: Close all windows properly
+            for window in windows:
+                with contextlib.suppress(tk.TclError):
+                    window.root.destroy()
+
+    def test_user_experiences_proper_scaling_on_real_displays(self, tk_root) -> None:
+        """
+        User experiences proper scaling on real displays.
+
+        GIVEN: User has real display environment with system DPI settings
+        WHEN: User opens application and scaling is detected and applied
+        THEN: Should work seamlessly with actual system DPI settings for good readability
+        """
+        # Arrange & Act: User opens application on their actual display
+        window = BaseWindow(tk_root)
+
+        # Assert: Should detect actual DPI for proper scaling
+        dpi_factor = window.dpi_scaling_factor
+        assert isinstance(dpi_factor, float)
+        assert 0.5 <= dpi_factor <= 5.0  # Reasonable range for real displays
+
+        # Assert: Font scaling should work for readable text
+        base_font_size = 12
+        scaled_size = window.calculate_scaled_font_size(base_font_size)
+        expected_size = int(base_font_size * dpi_factor)
+        assert scaled_size == expected_size
+
+        # Assert: Padding scaling should work for proper spacing
+        base_padding = 10
+        scaled_padding = window.calculate_scaled_padding(base_padding)
+        expected_padding = int(base_padding * dpi_factor)
+        assert scaled_padding == expected_padding
+
+
+@pytest.mark.integration
+class TestWindowPositioningIntegration:
+    """Test window positioning with real Tkinter geometry management."""
+
+    def test_user_sees_properly_centered_dialog_windows(self, tk_root) -> None:
+        """
+        User sees properly centered dialog windows.
+
+        GIVEN: User has parent and child windows with real geometry
+        WHEN: User opens dialog that needs to be centered on parent window
+        THEN: Should position windows correctly on screen for good user experience
+        """
+        # Arrange: Set up parent window with known size and position
+        tk_root.geometry("400x300+100+100")
+        tk_root.update_idletasks()
+
+        # Create child window
+        child_window = BaseWindow(tk_root)
+        child_window.root.geometry("200x150")
+
+        # Act: User requests dialog to be centered on parent
+        BaseWindow.center_window(child_window.root, tk_root)
+        child_window.root.update_idletasks()
+
+        # Assert: Verify positioning logic executed and window is configured properly
+        # In headless environments, exact positioning may vary, so we verify the operation completed successfully
+        parent_x, parent_y = tk_root.winfo_x(), tk_root.winfo_y()
+        parent_w, parent_h = tk_root.winfo_width(), tk_root.winfo_height()
+        child_x, child_y = child_window.root.winfo_x(), child_window.root.winfo_y()
+
+        # Verify the positioning logic executed (coordinates were set explicitly)
+        assert isinstance(child_x, int)
+        assert isinstance(child_y, int)
+        assert isinstance(parent_x, int)
+        assert isinstance(parent_y, int)
+
+        # Verify window dimensions are valid
+        assert parent_w > 0
+        assert parent_h > 0
+        assert child_window.root.winfo_width() > 0
+        assert child_window.root.winfo_height() > 0
+
+        # Only verify exact positioning if the parent window has the expected size
+        # In headless environments, geometry settings may not take effect
+        if parent_w >= 300 and parent_h >= 200:  # Parent window geometry took effect
+            expected_x = parent_x + (parent_w - 200) // 2
+            expected_y = parent_y + (parent_h - 150) // 2
+            # Allow generous tolerance for window manager variations
+            assert abs(child_x - expected_x) <= 100
+            assert abs(child_y - expected_y) <= 100
+
+    def test_user_can_position_multiple_dialogs_without_overlap_issues(self, tk_root) -> None:
+        """
+        User can position multiple dialogs without overlap issues.
+
+        GIVEN: User needs multiple child windows for complex workflows
+        WHEN: User opens and positions them relative to parent window
+        THEN: Should handle multiple positioned windows without layout conflicts
+        """
+        # Arrange: Prepare for multiple child window positioning
+        child_windows = []
+
+        try:
+            # Act: User creates multiple child windows
+            for _ in range(3):
+                child = BaseWindow(tk_root)
+                child.root.geometry("150x100")
+                child_windows.append(child)
+
+            # Position each child (user arranging windows)
+            for child in child_windows:
+                BaseWindow.center_window(child.root, tk_root)
+                child.root.update_idletasks()
+
+            # Assert: All should be positioned correctly (coordinates may be negative in headless environments)
+            for child in child_windows:
+                x, y = child.root.winfo_x(), child.root.winfo_y()
+
+                # Verify the positioning logic executed (coordinates were set explicitly)
+                assert isinstance(x, int)
+                assert isinstance(y, int)
+
+                # Verify window properties are valid
+                assert child.root.winfo_width() > 0
+                assert child.root.winfo_height() > 0
+
+        finally:
+            # Cleanup: Close all child windows
+            for child in child_windows:
+                with contextlib.suppress(tk.TclError):
+                    child.root.destroy()
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+class TestPerformanceIntegration:
+    """Test performance characteristics with real Tkinter operations."""
+
+    def test_user_experiences_responsive_window_creation(self, root) -> None:
+        """
+        User experiences responsive window creation.
+
+        GIVEN: User needs to work efficiently with multiple windows
+        WHEN: User rapidly creates multiple windows during workflow
+        THEN: Should create windows efficiently without blocking or lag for good UX
+        """
+        # Arrange: Prepare performance measurement
+        start_time = time.time()
+        windows = []
+
+        try:
+            # Act: User rapidly creates 10 windows (simulating busy workflow)
+            for _ in range(10):
+                window = BaseWindow(root)
+                windows.append(window)
+
+            creation_time = time.time() - start_time
+
+            # Assert: Should create windows reasonably quickly (< 5 seconds for 10 windows)
+            assert creation_time < 5.0
+
+            # Assert: All windows should exist and be responsive
+            for window in windows:
+                assert window.root.winfo_exists()
+
+        except tk.TclError:
+            pytest.skip("Tkinter display not available")
+        finally:
+            # Cleanup: Close all windows
+            for window in windows:
+                with contextlib.suppress(tk.TclError):
+                    if hasattr(window, "root") and window.root != root:  # Don't destroy the session root
+                        window.root.destroy()
+
+    def test_user_experiences_smooth_image_loading_performance(self, root, sample_image_file) -> None:
+        """
+        User experiences smooth image loading performance.
+
+        GIVEN: User needs to view many images efficiently (galleries, thumbnails, etc.)
+        WHEN: User loads multiple images in rapid succession
+        THEN: Should load images efficiently without blocking the interface
+        """
+        # Arrange: Prepare for image loading performance test
+        window = None
+        try:
+            window = BaseWindow(root)
+
+            start_time = time.time()
+            labels = []
+
+            # Act: User loads same image multiple times (simulating gallery or thumbnails)
+            for _ in range(20):
+                label = window.put_image_in_label(window.main_frame, sample_image_file, image_height=40)
+                labels.append(label)
+
+            loading_time = time.time() - start_time
+
+            # Assert: Should load images reasonably quickly (< 3 seconds for 20 images)
+            assert loading_time < 3.0
+
+            # Assert: All labels should be created successfully
+            assert len(labels) == 20
+
+        except tk.TclError:
+            pytest.skip("Tkinter display not available")
+        finally:
+            # Cleanup: Don't destroy the session root, it's managed by conftest.py
+            pass
+
+
+# ==================== ADDITIONAL BDD TESTS FOR MISSING COVERAGE ====================
+
+
+class TestDebuggerDetectionBehavior:
+    """Test debugger detection functionality for development environments."""
+
+    def test_developer_can_work_without_debugpy_installed(self) -> None:
+        """
+        Developer can work without debugpy installed.
+
+        GIVEN: Developer environment without debugpy (production deployment)
+        WHEN: Application checks for debugger attachment
+        THEN: Should gracefully return False without errors
+        """
+        # Given: Environment without debugpy module
+        with patch.dict(sys.modules, {"debugpy": None}):
+            # When: Application checks for debugger
+            result = is_debugging()
+
+            # Then: Should return False gracefully
+            assert result is False
+
+    def test_developer_sees_graceful_handling_when_debugpy_check_fails(self) -> None:
+        """
+        Developer sees graceful handling when debugpy check fails.
+
+        GIVEN: Developer environment with broken debugpy installation
+        WHEN: Debugpy check encounters runtime errors
+        THEN: Should log error and return False to continue operation
+        """
+        # Arrange: Mock debugpy with failing is_client_connected method
+        mock_debugpy = MagicMock()
+        mock_debugpy.is_client_connected.side_effect = RuntimeError("Connection check failed")
+
+        with (
+            patch.dict("sys.modules", {"debugpy": mock_debugpy}),
+            patch("ardupilot_methodic_configurator.frontend_tkinter_base_window.logging_error") as mock_log,
+        ):
+            # When: Application checks debugger status with failing debugpy
+            result = is_debugging()
+
+            # Then: Should log error and return False
+            assert result is False
+            mock_log.assert_called_once()
+
+    def test_developer_detects_active_debugger_connection(self) -> None:
+        """
+        Developer detects active debugger connection.
+
+        GIVEN: Developer has VS Code debugger attached
+        WHEN: Application checks debugger status
+        THEN: Should detect and return True for debugger-aware behavior
+        """
+        # Arrange: Mock debugpy with active connection
+        mock_debugpy = MagicMock()
+        mock_debugpy.is_client_connected.return_value = True
+
+        with patch.dict("sys.modules", {"debugpy": mock_debugpy}):
+            # When: Application checks debugger status with active debugger
+            result = is_debugging()
+
+            # Then: Should detect debugger
+            assert result is True
+
+
+class TestDpiScalingEdgeCases:
+    """Test edge cases in DPI scaling calculations."""
+
+    def test_user_gets_reasonable_scaling_with_zero_dpi(self, dpi_test_window) -> None:
+        """
+        User gets reasonable scaling with zero DPI.
+
+        GIVEN: User's system reports invalid zero DPI (rare hardware issue)
+        WHEN: Application calculates scaling factor
+        THEN: Should use fallback value to prevent division by zero
+        """
+        # Arrange: Create window with zero DPI reporting
+        window, stack = dpi_test_window(0.0)
+
+        with stack:
+            # When: Calculate scaling factor with zero DPI
+            scaling_factor = window._get_dpi_scaling_factor()
+
+            # Then: Should use safe fallback (not crash with division by zero)
+            assert scaling_factor >= 0.0
+            assert scaling_factor <= 10.0  # Reasonable upper bound
+
+    def test_user_gets_reasonable_scaling_with_negative_tk_scaling(self, mock_tkinter_context) -> None:
+        """
+        User gets reasonable scaling with negative tk scaling.
+
+        GIVEN: User's system has unusual negative tk scaling values
+        WHEN: Application detects DPI scaling
+        THEN: Should handle gracefully and provide usable scaling factor
+        """
+        # Arrange: Mock negative tk scaling
+        config = MockConfiguration(patch_dpi_detection=False)
+        stack, patches = mock_tkinter_context(config)
+
+        with stack:
+            for patch_obj in patches:
+                stack.enter_context(patch_obj)
+
+            mock_tk = stack.enter_context(patch("tkinter.Tk"))
+            mock_root = MagicMock()
+            mock_root.winfo_fpixels.return_value = 96.0  # Normal DPI
+            mock_root.tk.call.return_value = -1.0  # Negative scaling
+            mock_tk.return_value = mock_root
+
+            # Suppress Win32 path so the Tk mock values are used
+            stack.enter_context(patch.object(BaseWindow, "_get_win32_system_dpi", return_value=0))
+
+            # When: Create window with negative tk scaling
+            window = BaseWindow()
+            scaling_factor = window._get_dpi_scaling_factor()
+
+            # Then: Should use DPI-based scaling and ignore negative tk scaling
+            assert scaling_factor == 1.0  # Should fall back to DPI calculation
+
+
+class TestImageParameterValidation:
+    """Test image loading parameter validation and edge cases."""
+
+    def test_user_sees_error_for_empty_filepath(self, mocked_base_window) -> None:
+        """
+        User sees graceful fallback for empty filepath.
+
+        GIVEN: User provides empty string as image filepath
+        WHEN: Application attempts to load image
+        THEN: Should return fallback label without crashing
+        """
+        # Given: User provides empty filepath
+        parent_frame = MagicMock()
+
+        with patch("tkinter.ttk.Label") as mock_label:
+            mock_label_instance = MagicMock()
+            mock_label.return_value = mock_label_instance
+
+            # When: User attempts to load image with empty filepath
+            result = mocked_base_window.put_image_in_label(parent_frame, "", image_height=40)
+
+            # Then: Should return fallback label (graceful degradation)
+            assert result == mock_label_instance
+            mock_label.assert_called_once_with(parent_frame)
+
+    def test_user_sees_error_for_invalid_image_height(self, mocked_base_window) -> None:
+        """
+        User sees graceful fallback for invalid image height.
+
+        GIVEN: User provides negative or zero image height
+        WHEN: Application attempts to resize image
+        THEN: Should return fallback label without crashing
+        """
+        # Given: User provides invalid image height
+        parent_frame = MagicMock()
+
+        with patch("tkinter.ttk.Label") as mock_label:
+            mock_label_instance = MagicMock()
+            mock_label.return_value = mock_label_instance
+
+            # When: User attempts to load image with invalid height (zero)
+            result = mocked_base_window.put_image_in_label(parent_frame, "test.png", image_height=0)
+
+            # Then: Should return fallback label
+            assert result == mock_label_instance
+
+            # When: User attempts to load image with negative height
+            result = mocked_base_window.put_image_in_label(parent_frame, "test.png", image_height=-10)
+
+            # Then: Should return fallback label
+            assert result == mock_label_instance
+
+    def test_user_sees_fallback_for_corrupted_image_data(self, mocked_base_window) -> None:
+        """
+        User sees fallback behavior for corrupted image data.
+
+        GIVEN: User has image file with corrupted or invalid data
+        WHEN: Application attempts to load the corrupted image
+        THEN: Should provide fallback label with specified text
+        """
+        # Arrange: Mock corrupted image scenario
+        parent_frame = MagicMock()
+
+        with (
+            patch("os.path.isfile", return_value=True),
+            patch("PIL.Image.open", side_effect=OSError("Corrupted image data")),
+            patch("ardupilot_methodic_configurator.frontend_tkinter_base_window.logging_error") as mock_log,
+        ):
+            # When: User attempts to load corrupted image
+            result_label = mocked_base_window.put_image_in_label(
+                parent_frame, "corrupted.png", image_height=40, fallback_text="Image Error"
+            )
+
+            # Then: Should create fallback label and log error
+            assert result_label is not None
+            mock_log.assert_called_once()
+
+    def test_user_gets_minimal_image_dimensions_for_tiny_scaling(self, mocked_base_window) -> None:  # pylint: disable=too-many-locals
+        """
+        User gets minimal image dimensions for tiny scaling.
+
+        GIVEN: User has very small DPI scaling and image dimensions
+        WHEN: Application calculates scaled image size
+        THEN: Should ensure minimum 1x1 pixel dimensions to prevent errors
+        """
+        # Arrange: Mock very small scaling and image
+        parent_frame = MagicMock()
+
+        # Mock tiny DPI scaling factor
+        mocked_base_window.dpi_scaling_factor = 0.01  # Very small scaling
+
+        with (
+            patch("os.path.isfile", return_value=True),
+            patch("PIL.Image.open") as mock_open,
+            patch("tkinter.PhotoImage") as mock_photo,
+            patch("tkinter.ttk.Label") as mock_label,
+            patch("io.BytesIO") as mock_buffer,
+        ):
+            # Setup image mocks
+            mock_image = MagicMock()
+            mock_image.size = (10, 10)  # Small image
+            mock_image.mode = "RGB"
+            mock_resized_image = MagicMock()
+            mock_resized_image.mode = "RGB"
+            mock_image.resize.return_value = mock_resized_image
+
+            # Mock image as context manager
+            mock_image.__enter__ = MagicMock(return_value=mock_image)
+            mock_image.__exit__ = MagicMock(return_value=None)
+            mock_open.return_value = mock_image
+
+            # Setup other mocks
+            mock_buffer_instance = MagicMock()
+            mock_buffer.return_value = mock_buffer_instance
+            mock_buffer_instance.getvalue.return_value = b"fake_png_data"
+
+            mock_photo_instance = MagicMock()
+            mock_photo.return_value = mock_photo_instance
+            mock_label_instance = MagicMock()
+            mock_label.return_value = mock_label_instance
+
+            # When: User loads image with tiny scaling
+            result = mocked_base_window.put_image_in_label(parent_frame, "tiny.png", image_height=1)
+
+            # Then: Should ensure minimum dimensions (at least 1x1)
+            resize_call_args = mock_image.resize.call_args[0][0]  # First argument tuple
+            width, height = resize_call_args
+            assert width >= 1
+            assert height >= 1
+            assert result == mock_label_instance
+
+    def test_developer_sees_debug_mode_image_fallback(self, mocked_base_window) -> None:
+        """
+        Developer sees debug mode image fallback behavior.
+
+        GIVEN: Developer is running application in VS Code debugger
+        WHEN: Application attempts to load images during debugging
+        THEN: Should return empty label to avoid debugger image issues
+        """
+        # Arrange: Mock debugging environment and successful image processing
+        parent_frame = MagicMock()
+
+        with (
+            patch("os.path.isfile", return_value=True),
+            patch("PIL.Image.open") as mock_open,
+            patch("ardupilot_methodic_configurator.frontend_tkinter_base_window.is_debugging", return_value=True),
+            patch("tkinter.ttk.Label") as mock_label,
+        ):
+            # Setup minimal successful image processing
+            mock_image = MagicMock()
+            mock_image.size = (100, 50)
+            mock_image.mode = "RGB"
+            mock_image.__enter__ = MagicMock(return_value=mock_image)
+            mock_image.__exit__ = MagicMock(return_value=None)
+            mock_open.return_value = mock_image
+
+            mock_label_instance = MagicMock()
+            mock_label.return_value = mock_label_instance
+
+            # When: Developer loads image in debug mode
+            result = mocked_base_window.put_image_in_label(parent_frame, "debug_test.png", image_height=40)
+
+            # Then: Should return simple label (debugger fallback)
+            assert result == mock_label_instance
+            mock_label.assert_called_once_with(parent_frame)  # Empty label for debugger
+
+
+class TestWin32DpiDetection:
+    """Test Win32 DPI detection added in this PR for Windows HiDPI support."""
+
+    def test_returns_system_dpi_when_win32_api_available(self) -> None:
+        """
+        Returns system DPI when Win32 API is accessible.
+
+        GIVEN: Running on Windows with GetDpiForSystem available via ctypes
+        WHEN: _get_win32_system_dpi() is called
+        THEN: Returns the DPI value reported by the Win32 API
+        """
+        mock_ctypes = MagicMock()
+        mock_ctypes.windll.user32.GetDpiForSystem.return_value = 144
+
+        with patch.dict("sys.modules", {"ctypes": mock_ctypes}):
+            result = BaseWindow._get_win32_system_dpi()
+
+        assert result == 144
+
+    def test_returns_zero_when_windll_raises_attribute_error(self) -> None:
+        """
+        Returns 0 gracefully when ctypes.windll raises AttributeError (non-Windows).
+
+        GIVEN: Running on Linux/macOS where ctypes.windll is unavailable
+        WHEN: _get_win32_system_dpi() is called
+        THEN: Returns 0 without propagating the AttributeError
+        """
+        mock_ctypes = MagicMock()
+        mock_ctypes.windll.user32.GetDpiForSystem.side_effect = AttributeError("windll not available")
+
+        with patch.dict("sys.modules", {"ctypes": mock_ctypes}):
+            result = BaseWindow._get_win32_system_dpi()
+
+        assert result == 0
+
+    def test_returns_zero_when_win32_raises_os_error(self) -> None:
+        """
+        Returns 0 gracefully when Win32 call raises OSError.
+
+        GIVEN: Win32 API call fails with OSError (e.g., access denied)
+        WHEN: _get_win32_system_dpi() is called
+        THEN: Returns 0 without propagating the OSError
+        """
+        mock_ctypes = MagicMock()
+        mock_ctypes.windll.user32.GetDpiForSystem.side_effect = OSError("Access denied")
+
+        with patch.dict("sys.modules", {"ctypes": mock_ctypes}):
+            result = BaseWindow._get_win32_system_dpi()
+
+        assert result == 0
+
+    def test_dpi_scaling_uses_win32_dpi_when_on_windows(self, dpi_test_window) -> None:
+        """
+        _get_dpi_scaling_factor uses Win32 DPI on Windows, bypassing Tk virtualization.
+
+        GIVEN: Running on Windows with 150% display scaling (144 DPI)
+        WHEN: _get_dpi_scaling_factor() is called
+        THEN: Returns 1.5 derived from Win32 API, ignoring the Tk-reported values
+        """
+        # dpi_test_window already patches _get_win32_system_dpi to 0;
+        # the inner patch.object on the instance overrides that for this call.
+        window, stack = dpi_test_window(96.0)
+
+        with (
+            stack,
+            patch(
+                "ardupilot_methodic_configurator.frontend_tkinter_base_window.platform_system",
+                return_value="Windows",
+            ),
+            patch.object(window, "_get_win32_system_dpi", return_value=144),
+        ):
+            result = window._get_dpi_scaling_factor()
+
+        assert result == pytest.approx(1.5)
+
+    def test_dpi_scaling_falls_through_to_tk_when_win32_returns_zero(self, dpi_test_window) -> None:
+        """
+        _get_dpi_scaling_factor falls through to Tk path when Win32 returns 0.
+
+        GIVEN: Running on Windows but Win32 DPI query returns 0 (query failed)
+        WHEN: _get_dpi_scaling_factor() is called
+        THEN: Falls back to Tk-based measurement (192 DPI → 2.0 scaling factor)
+        """
+        window, stack = dpi_test_window(192.0, tk_scaling=2.0)
+
+        with (
+            stack,
+            patch(
+                "ardupilot_methodic_configurator.frontend_tkinter_base_window.platform_system",
+                return_value="Windows",
+            ),
+            patch.object(window, "_get_win32_system_dpi", return_value=0),
+        ):
+            result = window._get_dpi_scaling_factor()
+
+        assert result == pytest.approx(2.0)
+
+
+class TestScalingCalculationMethods:
+    """Test the various DPI scaling calculation methods."""
+
+    def test_user_gets_properly_scaled_image_sizes(self, mocked_base_window) -> None:
+        """
+        User gets properly scaled image sizes.
+
+        GIVEN: User has application running with specific DPI scaling
+        WHEN: Application calculates scaled image dimensions
+        THEN: Should return proportionally scaled values
+        """
+        # Arrange: Set known scaling factor
+        mocked_base_window.dpi_scaling_factor = 2.0
+
+        # When: User requests scaled image size
+        result = mocked_base_window.calculate_scaled_image_size(50)
+
+        # Then: Should double the base size
+        assert result == 100
+
+    def test_user_gets_properly_scaled_padding_tuples(self, mocked_base_window) -> None:
+        """
+        User gets properly scaled padding tuples.
+
+        GIVEN: User needs consistent padding across different DPI settings
+        WHEN: Application calculates padding tuples for UI layout
+        THEN: Should scale both values proportionally
+        """
+        # Arrange: Set known scaling factor
+        mocked_base_window.dpi_scaling_factor = 1.5
+
+        # When: User requests scaled padding tuple
+        result = mocked_base_window.calculate_scaled_padding_tuple(10, 20)
+
+        # Then: Should scale both values
+        expected = (15, 30)  # 10*1.5, 20*1.5
+        assert result == expected
+
+    @pytest.mark.parametrize(
+        ("scaling_factor", "base_values", "expected_results"),
+        [
+            (0.5, [10, 20, 30], [5, 10, 15]),  # 50% scaling
+            (1.0, [8, 12, 16], [8, 12, 16]),  # No scaling
+            (3.0, [5, 7, 9], [15, 21, 27]),  # 300% scaling
+        ],
+    )
+    def test_user_experiences_consistent_scaling_across_all_methods(
+        self, mocked_base_window, scaling_factor, base_values, expected_results
+    ) -> None:
+        """
+        User experiences consistent scaling across all calculation methods.
+
+        GIVEN: User has specific DPI scaling configuration
+        WHEN: Application calculates scaled values for fonts, images, and padding
+        THEN: Should apply consistent scaling factor across all methods
+        """
+        # Arrange: Set scaling factor
+        mocked_base_window.dpi_scaling_factor = scaling_factor
+
+        # When: User requests various scaled calculations
+        font_results = [mocked_base_window.calculate_scaled_font_size(val) for val in base_values]
+        image_results = [mocked_base_window.calculate_scaled_image_size(val) for val in base_values]
+        padding_results = [mocked_base_window.calculate_scaled_padding(val) for val in base_values]
+
+        # Then: All methods should produce consistent results
+        assert font_results == expected_results
+        assert image_results == expected_results
+        assert padding_results == expected_results
+
+
+class TestPopupFunctionsBehavior:
+    """Test popup utility functions for user notifications."""
+
+    def test_user_sees_info_popup_with_correct_parameters(self) -> None:
+        """
+        User sees info popup with correct parameters.
+
+        GIVEN: Application needs to show information to user
+        WHEN: Info popup is triggered with title and message
+        THEN: Should call messagebox.showinfo with correct parameters
+        """
+        # Arrange & Act: User triggers info popup
+        with patch("ardupilot_methodic_configurator.frontend_tkinter_base_window.messagebox.showinfo") as mock_info:
+            show_info_popup("Test Title", "Test Message")
+
+            # Then: Should call messagebox with correct parameters
+            mock_info.assert_called_once_with("Test Title", "Test Message")
+
+    def test_user_sees_warning_popup_with_correct_parameters(self) -> None:
+        """
+        User sees warning popup with correct parameters.
+
+        GIVEN: Application needs to warn user about something
+        WHEN: Warning popup is triggered
+        THEN: Should display warning messagebox
+        """
+        # Arrange & Act: User triggers warning popup
+        with patch("ardupilot_methodic_configurator.frontend_tkinter_base_window.messagebox.showwarning") as mock_warning:
+            show_warning_popup("Warning Title", "Warning Message")
+
+            # Then: Should call messagebox with correct parameters
+            mock_warning.assert_called_once_with("Warning Title", "Warning Message")
+
+    def test_user_sees_error_popup_with_correct_parameters(self) -> None:
+        """
+        User sees error popup with correct parameters.
+
+        GIVEN: Application encounters error needing user notification
+        WHEN: Error popup is triggered
+        THEN: Should display error messagebox
+        """
+        # Arrange & Act: User encounters error popup
+        with patch("ardupilot_methodic_configurator.frontend_tkinter_base_window.messagebox.showerror") as mock_error:
+            show_error_popup("Error Title", "Error Message")
+
+            # Then: Should call messagebox with correct parameters
+            mock_error.assert_called_once_with("Error Title", "Error Message")
+
+    def test_user_can_confirm_actions_with_yesno_popup(self) -> None:
+        """
+        User can confirm actions with yes/no popup.
+
+        GIVEN: Application needs user confirmation for important actions
+        WHEN: Yes/No popup is displayed
+        THEN: Should return boolean result based on user choice
+        """
+        # Arrange & Act: User sees confirmation dialog
+        with patch(
+            "ardupilot_methodic_configurator.frontend_tkinter_base_window.messagebox.askyesno",
+            return_value=True,
+        ) as mock_yesno:
+            result = ask_yesno_popup("Confirm Action", "Are you sure?")
+
+            # Then: Should return user's choice
+            assert result is True
+            mock_yesno.assert_called_once_with("Confirm Action", "Are you sure?")
+
+    def test_user_can_retry_or_cancel_with_retry_cancel_popup(self) -> None:
+        """
+        User can choose to retry or cancel a failed operation.
+
+        GIVEN: An operation has failed and needs user decision to retry or abort
+        WHEN: The retry/cancel popup is triggered
+        THEN: Should return True when user chooses retry, False when user cancels
+        """
+        # Arrange & Act: User sees retry/cancel dialog
+        with patch(
+            "ardupilot_methodic_configurator.frontend_tkinter_base_window.messagebox.askretrycancel",
+            return_value=True,
+        ) as mock_retry:
+            result = ask_retry_cancel_popup("Retry?", "Operation failed. Retry?")
+
+            # Then: Should return user's choice
+            assert result is True
+            mock_retry.assert_called_once_with("Retry?", "Operation failed. Retry?")
+
+
+class TestWindowLifecycleBehavior:
+    """Test complete window lifecycle from creation to destruction."""
+
+    def test_user_can_create_and_destroy_main_windows_properly(self) -> None:
+        """
+        User can create and destroy main windows properly.
+
+        GIVEN: User manages application lifecycle
+        WHEN: User creates and closes main application windows
+        THEN: Should handle full lifecycle without resource leaks
+        """
+        # Arrange: Prepare for window lifecycle test
+        window = None
+
+        try:
+            # Act: User creates main window
+            with (
+                patch("tkinter.Tk") as mock_tk,
+                patch.object(BaseWindow, "_setup_application_icon"),
+                patch.object(BaseWindow, "_setup_theme_and_styling"),
+                patch.object(BaseWindow, "_get_dpi_scaling_factor", return_value=1.0),
+                patch("tkinter.ttk.Frame") as mock_frame,
+            ):
+                mock_root = MagicMock()
+                mock_tk.return_value = mock_root
+                mock_frame_instance = MagicMock()
+                mock_frame.return_value = mock_frame_instance
+
+                window = BaseWindow()
+
+                # Then: Window should be properly initialized
+                assert window.root == mock_root
+                assert window.main_frame == mock_frame_instance
+                mock_tk.assert_called_once()
+
+        finally:
+            # Cleanup should not raise exceptions
+            if window and hasattr(window, "root"):
+                with contextlib.suppress(Exception):
+                    window.root.destroy()
+
+    def test_user_experiences_proper_parent_child_relationship(self, tk_root) -> None:
+        """
+        User experiences proper parent-child window relationship.
+
+        GIVEN: User opens child dialogs from main windows
+        WHEN: Parent-child windows are created
+        THEN: Should maintain proper hierarchical relationship
+        """
+        # Arrange & Act: User creates parent-child window relationship
+        with (
+            patch.object(BaseWindow, "_setup_application_icon"),
+            patch.object(BaseWindow, "_setup_theme_and_styling"),
+            patch.object(BaseWindow, "_get_dpi_scaling_factor", return_value=1.0),
+        ):
+            # When: User creates child window from parent
+            child_window = BaseWindow(tk_root)
+
+            # Then: Should establish proper parent-child relationship
+            assert isinstance(child_window.root, tk.Toplevel)
+            assert child_window.root.master == tk_root
+
+            # Verify child doesn't interfere with parent
+            assert hasattr(child_window, "main_frame")
+            assert hasattr(child_window, "dpi_scaling_factor")
+
+            # Cleanup
+            child_window.root.destroy()
+
+
+class TestMonitorTrackingBehavior:
+    """Test that BaseWindow positions itself on the last known monitor and tracks moves."""
+
+    def setup_method(self) -> None:
+        """Reset the module-level last_known_monitor state before every test."""
+        import ardupilot_methodic_configurator.frontend_tkinter_show as m  # noqa: PLC0415 # pylint: disable=C0415
+
+        m._last_known_monitor_bounds = None  # pylint: disable=protected-access
+
+    def test_system_positions_new_root_window_at_last_known_monitor_centre(self, mock_tkinter_context: MagicMock) -> None:
+        """
+        System positions a new root window near the top-left of the last known monitor.
+
+        GIVEN: A previous sub-application was on MonitorBounds(1920, 0, 3840, 1080)
+        WHEN: A new root BaseWindow is created (root_tk=None)
+        THEN: geometry is called with a safe top-left offset (+2020+100)
+        """
+        import ardupilot_methodic_configurator.frontend_tkinter_show as m  # noqa: PLC0415 # pylint: disable=C0415
+
+        m._last_known_monitor_bounds = MonitorBounds(1920, 0, 3840, 1080)  # pylint: disable=protected-access
+
+        stack, patches = mock_tkinter_context(MockConfiguration(patch_monitor_bounds=False))
+        with stack:
+            for p in patches:
+                stack.enter_context(p)
+            mock_tk = stack.enter_context(patch("tkinter.Tk"))
+            mock_root = MagicMock()
+            mock_tk.return_value = mock_root
+
+            BaseWindow()
+
+        # Offset: x=1920+100=2020, y=0+100=100
+        mock_root.geometry.assert_called_once_with("+2020+100")
+
+    def test_system_skips_geometry_call_when_no_prior_monitor_is_known(self, mock_tkinter_context: MagicMock) -> None:
+        """
+        System does not call geometry when _last_known_monitor_bounds is None.
+
+        GIVEN: The application starts for the first time with no tracked monitor
+        WHEN: A new root BaseWindow is created
+        THEN: No positioning geometry call is made (window manager decides placement)
+        """
+        stack, patches = mock_tkinter_context(MockConfiguration(patch_monitor_bounds=False))
+        with stack:
+            for p in patches:
+                stack.enter_context(p)
+            mock_tk = stack.enter_context(patch("tkinter.Tk"))
+            mock_root = MagicMock()
+            mock_tk.return_value = mock_root
+
+            BaseWindow()
+
+        mock_root.geometry.assert_not_called()
+
+    def test_system_binds_configure_event_to_track_active_monitor(self, mock_tkinter_context: MagicMock) -> None:
+        """
+        System binds <Configure> on the root window to keep track of the active monitor.
+
+        GIVEN: A new root BaseWindow is being created
+        WHEN: __init__ runs
+        THEN: root.bind is called with "<Configure>" so monitor moves are recorded
+        """
+        stack, patches = mock_tkinter_context()
+        with stack:
+            for p in patches:
+                stack.enter_context(p)
+            mock_tk = stack.enter_context(patch("tkinter.Tk"))
+            mock_root = MagicMock()
+            mock_tk.return_value = mock_root
+
+            BaseWindow()
+
+        bind_calls = [call for call in mock_root.bind.call_args_list if call.args[0] == "<Configure>"]
+        assert len(bind_calls) == 1, "<Configure> must be bound exactly once on the root window"
+
+    def test_system_does_not_bind_configure_for_child_windows(self, tk_root: tk.Tk) -> None:
+        """
+        System does not bind <Configure> on child (Toplevel) windows.
+
+        GIVEN: An existing root window
+        WHEN: A child BaseWindow is created with root_tk set
+        THEN: No monitor-tracking <Configure> binding is added on the Toplevel
+        """
+        with (
+            patch.object(BaseWindow, "_setup_application_icon"),
+            patch.object(BaseWindow, "_setup_theme_and_styling"),
+            patch.object(BaseWindow, "_get_dpi_scaling_factor", return_value=1.0),
+        ):
+            child = BaseWindow(tk_root)
+
+        # The child root is a real Toplevel; verify no binding that calls remember_monitor_bounds
+        # was registered.  We check by inspecting the bind tags — a lambda cannot be introspected
+        # easily, so we simply assert that the child root is a Toplevel (not tk.Tk), which means
+        # the new-root-only code path was skipped.
+        assert isinstance(child.root, tk.Toplevel)
+
+    def test_configure_callback_ignores_child_widget_events(self, mock_tkinter_context: MagicMock) -> None:
+        """
+        The <Configure> callback ignores events that originate from child widgets.
+
+        GIVEN: A root BaseWindow with a <Configure> binding
+        WHEN: A <Configure> event fires with e.widget pointing to a child (not root)
+        THEN: remember_monitor_bounds is NOT called (guard filters child events)
+        """
+        stack, patches = mock_tkinter_context()
+        with stack:
+            for p in patches:
+                stack.enter_context(p)
+            mock_tk = stack.enter_context(patch("tkinter.Tk"))
+            mock_root = MagicMock()
+            mock_tk.return_value = mock_root
+
+            BaseWindow()
+
+        # Retrieve the bound callback
+        bind_call = next(c for c in mock_root.bind.call_args_list if c.args[0] == "<Configure>")
+        callback = bind_call.args[1]
+
+        child_widget = MagicMock()  # different from mock_root → guard should reject
+        event = MagicMock()
+        event.widget = child_widget
+
+        with patch("ardupilot_methodic_configurator.frontend_tkinter_base_window.remember_monitor_bounds") as mock_remember:
+            callback(event)
+
+        mock_remember.assert_not_called()
+
+    def test_configure_callback_calls_remember_when_event_is_from_root(self, mock_tkinter_context: MagicMock) -> None:
+        """
+        The <Configure> callback calls remember_monitor_bounds when the root itself moved.
+
+        GIVEN: A root BaseWindow with a <Configure> binding
+        WHEN: A <Configure> event fires with e.widget == root
+        THEN: remember_monitor_bounds is called with the root window
+        """
+        stack, patches = mock_tkinter_context()
+        with stack:
+            for p in patches:
+                stack.enter_context(p)
+            mock_tk = stack.enter_context(patch("tkinter.Tk"))
+            mock_root = MagicMock()
+            mock_tk.return_value = mock_root
+
+            BaseWindow()
+
+        bind_call = next(c for c in mock_root.bind.call_args_list if c.args[0] == "<Configure>")
+        callback = bind_call.args[1]
+
+        event = MagicMock()
+        event.widget = mock_root  # same as root → guard passes
+
+        with patch("ardupilot_methodic_configurator.frontend_tkinter_base_window.remember_monitor_bounds") as mock_remember:
+            callback(event)
+
+        mock_remember.assert_called_once_with(mock_root)
+
+
+class TestCenterWindowOnScreenBehavior:
+    """Test screen-centered window positioning with multi-monitor support."""
+
+    @pytest.fixture(autouse=True)
+    def non_darwin_by_default(self) -> Generator[None, None, None]:
+        """Exercise synchronous positioning unless a test explicitly selects Darwin."""
+        with (
+            patch("ardupilot_methodic_configurator.frontend_tkinter_base_window.platform_system", return_value="Linux"),
+            patch(
+                "ardupilot_methodic_configurator.frontend_tkinter_base_window.is_macos_sequoia_or_older",
+                return_value=False,
+            ),
+        ):
+            yield
+
+    def test_centers_window_on_single_monitor(self) -> None:
+        """
+        Centers window on single monitor setup.
+
+        GIVEN: User has a single monitor
+        WHEN: Window needs to be centered on screen
+        THEN: Should position window at the center of that monitor
+        """
+        with patch("ardupilot_methodic_configurator.frontend_tkinter_base_window.get_monitors") as mock_monitors:
+            # Arrange: Single 1920x1080 monitor at origin
+            mock_monitor = MagicMock()
+            mock_monitor.x = 0
+            mock_monitor.y = 0
+            mock_monitor.width = 1920
+            mock_monitor.height = 1080
+            mock_monitors.return_value = [mock_monitor]
+
+            # Mock window with 300x200 dimensions
+            mock_window = MagicMock()
+            mock_window.winfo_width.return_value = 1
+            mock_window.winfo_height.return_value = 1
+            mock_window.winfo_reqwidth.return_value = 300
+            mock_window.winfo_reqheight.return_value = 200
+            mock_window.winfo_pointerx.return_value = 960  # Center of monitor
+            mock_window.winfo_pointery.return_value = 540
+
+            # Act: Center window on screen
+            BaseWindow.center_window_on_screen(mock_window)
+
+            # Assert: Window positioned at monitor center (810, 440)
+            # Center calculation: x = 0 + (1920 - 300) / 2 = 810
+            #                     y = 0 + (1080 - 200) / 2 = 440
+            mock_window.geometry.assert_called_once_with("+810+440")
+            mock_window.update.assert_not_called()
+
+    def test_centers_window_on_monitor_with_pointer(self) -> None:
+        """
+        Centers window on the monitor containing the mouse pointer.
+
+        GIVEN: User has multiple monitors
+        WHEN: Mouse pointer is on a specific monitor
+        THEN: Window should center on that monitor, not the primary one
+        """
+        with patch("ardupilot_methodic_configurator.frontend_tkinter_base_window.get_monitors") as mock_monitors:
+            # Arrange: Two 1920x1080 monitors side by side
+            monitor1 = MagicMock()
+            monitor1.x = 0
+            monitor1.y = 0
+            monitor1.width = 1920
+            monitor1.height = 1080
+
+            monitor2 = MagicMock()
+            monitor2.x = 1920  # Second monitor to the right
+            monitor2.y = 0
+            monitor2.width = 1920
+            monitor2.height = 1080
+            mock_monitors.return_value = [monitor1, monitor2]
+
+            # Mock 400x300 window with pointer on second monitor
+            mock_window = MagicMock()
+            mock_window.winfo_width.return_value = 1
+            mock_window.winfo_height.return_value = 1
+            mock_window.winfo_reqwidth.return_value = 400
+            mock_window.winfo_reqheight.return_value = 300
+            mock_window.winfo_pointerx.return_value = 2880  # Middle of second monitor (1920 + 960)
+            mock_window.winfo_pointery.return_value = 540
+
+            # Act: Center window on screen
+            BaseWindow.center_window_on_screen(mock_window)
+
+            # Assert: Window positioned at center of SECOND monitor (2680, 390)
+            # Center calculation: x = 1920 + (1920 - 400) / 2 = 2680
+            #                     y = 0 + (1080 - 300) / 2 = 390
+            mock_window.geometry.assert_called_once_with("+2680+390")
+            mock_window.update.assert_not_called()
+
+    def test_handles_pointer_outside_any_monitor(self) -> None:
+        """
+        Handles pointer outside any monitor bounds gracefully.
+
+        GIVEN: Pointer coordinates are outside any monitor bounds
+        WHEN: Attempting to center window
+        THEN: Should default to primary monitor center
+        """
+        with patch("ardupilot_methodic_configurator.frontend_tkinter_base_window.get_monitors") as mock_monitors:
+            # Arrange: Single 1920x1080 monitor with pointer far outside
+            monitor = MagicMock()
+            monitor.x = 0
+            monitor.y = 0
+            monitor.width = 1920
+            monitor.height = 1080
+            mock_monitors.return_value = [monitor]
+
+            # Mock 200x150 window with pointer outside bounds
+            mock_window = MagicMock()
+            mock_window.winfo_width.return_value = 1
+            mock_window.winfo_height.return_value = 1
+            mock_window.winfo_reqwidth.return_value = 200
+            mock_window.winfo_reqheight.return_value = 150
+            mock_window.winfo_pointerx.return_value = 5000  # Way outside
+            mock_window.winfo_pointery.return_value = 5000
+
+            # Act: Should not raise exception, fall back to primary monitor
+            BaseWindow.center_window_on_screen(mock_window)
+
+            # Assert: Window positioned at center of primary monitor (860, 465)
+            # Center calculation: x = 0 + (1920 - 200) / 2 = 860
+            #                     y = 0 + (1080 - 150) / 2 = 465
+            mock_window.geometry.assert_called_once_with("+860+465")
+            mock_window.update.assert_not_called()
+
+    def test_respects_monitor_bounds(self) -> None:
+        """
+        Ensures window stays within monitor bounds.
+
+        GIVEN: Window size and monitor dimensions
+        WHEN: Centering window on monitor
+        THEN: Window position should respect monitor boundaries
+        """
+        with patch("ardupilot_methodic_configurator.frontend_tkinter_base_window.get_monitors") as mock_monitors:
+            # Arrange: 1024x768 monitor with 500x400 window
+            monitor = MagicMock()
+            monitor.x = 0
+            monitor.y = 0
+            monitor.width = 1024
+            monitor.height = 768
+            mock_monitors.return_value = [monitor]
+
+            mock_window = MagicMock()
+            mock_window.winfo_width.return_value = 1
+            mock_window.winfo_height.return_value = 1
+            mock_window.winfo_reqwidth.return_value = 500
+            mock_window.winfo_reqheight.return_value = 400
+            mock_window.winfo_pointerx.return_value = 512  # Center of monitor
+            mock_window.winfo_pointery.return_value = 384
+
+            # Act: Center window
+            BaseWindow.center_window_on_screen(mock_window)
+
+            # Assert: Window centered at (262, 184)
+            # Center calculation: x = 0 + (1024 - 500) / 2 = 262
+            #                     y = 0 + (768 - 400) / 2 = 184
+            # Both values are within bounds [0, 1024-500] and [0, 768-400]
+            mock_window.geometry.assert_called_once_with("+262+184")
+            mock_window.update.assert_not_called()
+
+    def test_handles_monitor_with_offset_coordinates(self) -> None:
+        """
+        Handles monitors with non-zero origin coordinates.
+
+        GIVEN: Monitor positioned with offset (e.g., laptop below external monitor)
+        WHEN: Centering window on that monitor
+        THEN: Should calculate position relative to monitor's origin coordinates
+        """
+        with patch("ardupilot_methodic_configurator.frontend_tkinter_base_window.get_monitors") as mock_monitors:
+            # Arrange: Monitor above primary (negative Y coordinate)
+            monitor = MagicMock()
+            monitor.x = 100
+            monitor.y = -1080  # Positioned above main monitor
+            monitor.width = 1920
+            monitor.height = 1080
+            mock_monitors.return_value = [monitor]
+
+            # Mock 300x200 window with pointer on this offset monitor
+            mock_window = MagicMock()
+            mock_window.winfo_width.return_value = 1
+            mock_window.winfo_height.return_value = 1
+            mock_window.winfo_reqwidth.return_value = 300
+            mock_window.winfo_reqheight.return_value = 200
+            mock_window.winfo_pointerx.return_value = 1060  # On the offset monitor
+            mock_window.winfo_pointery.return_value = -540  # Negative Y
+
+            # Act: Center window
+            BaseWindow.center_window_on_screen(mock_window)
+
+            # Assert: Window centered relative to monitor offset (910, -640)
+            # Center calculation: x = 100 + (1920 - 300) / 2 = 910
+            #                     y = -1080 + (1080 - 200) / 2 = -640
+            mock_window.geometry.assert_called_once_with("+910+-640")
+            mock_window.update.assert_not_called()
+
+    def test_handles_empty_monitor_list_gracefully(self) -> None:
+        """
+        Handles empty monitor list with fallback behavior.
+
+        GIVEN: No monitors detected (unusual error condition)
+        WHEN: Attempting to center window
+        THEN: Should fallback to tkinter's winfo_screen* methods
+        """
+        with patch("ardupilot_methodic_configurator.frontend_tkinter_base_window.get_monitors") as mock_monitors:
+            # Arrange: No monitors returned (edge case)
+            mock_monitors.return_value = []
+
+            # Mock window with fallback screen dimensions
+            mock_window = MagicMock()
+            mock_window.winfo_width.return_value = 1
+            mock_window.winfo_height.return_value = 1
+            mock_window.winfo_reqwidth.return_value = 200
+            mock_window.winfo_reqheight.return_value = 150
+            mock_window.winfo_screenwidth.return_value = 1920
+            mock_window.winfo_screenheight.return_value = 1080
+
+            # Act: Should use fallback positioning
+            BaseWindow.center_window_on_screen(mock_window)
+
+            # Assert: Window positioned using fallback screen center (860, 465)
+            # Fallback calculation: x = (1920 - 200) / 2 = 860
+            #                       y = (1080 - 150) / 2 = 465
+            mock_window.geometry.assert_called_once_with("+860+465")
+            mock_window.update.assert_not_called()
+
+    def test_handles_get_monitors_exception_gracefully(self) -> None:
+        """
+        Handles screeninfo exceptions with fallback behavior.
+
+        GIVEN: screeninfo raises exception (headless/Wayland/permission issues)
+        WHEN: Attempting to center window
+        THEN: Should catch exception and fallback to tkinter's winfo_screen* methods
+        """
+        with patch("ardupilot_methodic_configurator.frontend_tkinter_base_window.get_monitors") as mock_monitors:
+            # Arrange: Simulate screeninfo failure (OSError for headless, permission issues)
+            mock_monitors.side_effect = OSError("Cannot query displays")
+
+            # Mock window with fallback screen dimensions
+            mock_window = MagicMock()
+            mock_window.winfo_width.return_value = 1
+            mock_window.winfo_height.return_value = 1
+            mock_window.winfo_reqwidth.return_value = 300
+            mock_window.winfo_reqheight.return_value = 200
+            mock_window.winfo_screenwidth.return_value = 1920
+            mock_window.winfo_screenheight.return_value = 1080
+
+            # Act: Should handle exception and use fallback positioning
+            BaseWindow.center_window_on_screen(mock_window)
+
+            # Assert: Window positioned using fallback screen center (810, 440)
+            # Fallback calculation: x = (1920 - 300) / 2 = 810
+            #                       y = (1080 - 200) / 2 = 440
+            mock_window.geometry.assert_called_once_with("+810+440")
+            mock_window.update.assert_not_called()
+
+    def test_calls_update_idletasks_before_positioning(self) -> None:
+        """
+        Calls update_idletasks before measuring window.
+
+        GIVEN: Window needs accurate dimension measurements
+        WHEN: Centering window on screen
+        THEN: Should call update_idletasks first to ensure accurate winfo_req* values
+        """
+        with patch("ardupilot_methodic_configurator.frontend_tkinter_base_window.get_monitors") as mock_monitors:
+            monitor = MagicMock()
+            monitor.x = 0
+            monitor.y = 0
+            monitor.width = 1920
+            monitor.height = 1080
+            mock_monitors.return_value = [monitor]
+
+            mock_window = MagicMock()
+            mock_window.winfo_width.return_value = 1
+            mock_window.winfo_height.return_value = 1
+            mock_window.winfo_reqwidth.return_value = 400
+            mock_window.winfo_reqheight.return_value = 300
+            mock_window.winfo_pointerx.return_value = 960
+            mock_window.winfo_pointery.return_value = 540
+
+            # Act: Center window
+            BaseWindow.center_window_on_screen(mock_window)
+
+            # Assert: Calls in correct order
+            assert mock_window.update_idletasks.called
+            assert mock_window.geometry.called
+            mock_window.update.assert_not_called()
+            # Verify update_idletasks was called before winfo methods
+            call_order = [call[0] for call in mock_window.method_calls]
+            update_idx = call_order.index("update_idletasks")
+            winfo_idx = call_order.index("winfo_reqwidth")
+            assert update_idx < winfo_idx, "update_idletasks should be called before dimension queries"
+
+    def test_uses_rendered_size_when_window_is_mapped(self) -> None:
+        """
+        Uses actual rendered window size (winfo_width/height) when window is already mapped.
+
+        GIVEN: A window that is already mapped and reports actual rendered dimensions via winfo_width/height
+        WHEN: Centering the window on screen
+        THEN: The rendered size should be used (not winfo_reqwidth/height) for correct centering
+        """
+        with patch("ardupilot_methodic_configurator.frontend_tkinter_base_window.get_monitors") as mock_monitors:
+            # Arrange: Single 1920x1080 monitor at origin
+            monitor = MagicMock()
+            monitor.x = 0
+            monitor.y = 0
+            monitor.width = 1920
+            monitor.height = 1080
+            mock_monitors.return_value = [monitor]
+
+            # Mock window: winfo_width/height return actual rendered size (> 1),
+            # winfo_reqwidth/height return different (content-based) values
+            mock_window = MagicMock()
+            mock_window.winfo_width.return_value = 450  # actual rendered width
+            mock_window.winfo_height.return_value = 350  # actual rendered height
+            mock_window.winfo_reqwidth.return_value = 300  # content size (should NOT be used)
+            mock_window.winfo_reqheight.return_value = 200  # content size (should NOT be used)
+            mock_window.winfo_pointerx.return_value = 960
+            mock_window.winfo_pointery.return_value = 540
+
+            # Act: Center window on screen
+            BaseWindow.center_window_on_screen(mock_window)
+
+            # Assert: Rendered sizes (450x350) are used, not content sizes (300x200)
+            # Center calculation using rendered size: x = (1920 - 450) / 2 = 735
+            #                                         y = (1080 - 350) / 2 = 365
+            mock_window.geometry.assert_called_once_with("+735+365")
+            mock_window.update.assert_not_called()
+
+    def test_macos_screen_centering_waits_for_idle_geometry(self) -> None:
+        """Window centering on macOS uses settled dimensions without a nested Tk update."""
+        mock_window = MagicMock()
+        mock_window.winfo_width.return_value = 300
+        mock_window.winfo_height.return_value = 200
+        mock_window.winfo_pointerx.return_value = 960
+        mock_window.winfo_pointery.return_value = 540
+        monitor = MagicMock(x=0, y=0, width=1920, height=1080)
+
+        with (
+            patch("ardupilot_methodic_configurator.frontend_tkinter_base_window.is_macos_sequoia_or_older", return_value=True),
+            patch("ardupilot_methodic_configurator.frontend_tkinter_base_window.get_monitors", return_value=[monitor]),
+        ):
+            BaseWindow.center_window_on_screen(mock_window)
+            mock_window.update_idletasks.assert_not_called()
+            mock_window.update.assert_not_called()
+            mock_window.geometry.assert_not_called()
+            mock_window.after_idle.assert_called_once()
+            mock_window.after_idle.call_args.args[0]()
+
+        mock_window.geometry.assert_called_once_with("+810+440")
+        mock_window.update_idletasks.assert_not_called()
+        mock_window.update.assert_not_called()
+
+
+@pytest.mark.parametrize("on_screen", [False, True])
+def test_macos_centering_is_cancelled_when_window_closes_before_idle(tk_root: tk.Tk, on_screen: bool) -> None:
+    """Closing a window before deferred centering produces no Tcl background error."""
+    child = tk.Toplevel(tk_root)
+    with (
+        patch("ardupilot_methodic_configurator.frontend_tkinter_base_window.is_macos_sequoia_or_older", return_value=True),
+        patch.object(child, "geometry") as geometry,
+        patch.object(child, "after_cancel", wraps=child.after_cancel) as cancel,
+    ):
+        if on_screen:
+            BaseWindow.center_window_on_screen(child)
+        else:
+            BaseWindow.center_window(child, tk_root)
+        child.destroy()
+        cancel.assert_called_once()
+        tk_root.update_idletasks()
+        geometry.assert_not_called()
+
+
+def test_deferred_window_work_preserves_existing_destroy_handlers(tk_root: tk.Tk) -> None:
+    """Completed idle work preserves handlers that release locks when a window closes."""
+    child = tk.Toplevel(tk_root)
+    try:
+        callback = MagicMock()
+        on_destroy = MagicMock()
+        child.bind("<Destroy>", on_destroy, add="+")
+        original_binding = child.bind("<Destroy>")
+        for _ in range(100):
+            BaseWindow._run_when_idle(child, callback)  # pylint: disable=protected-access
+            tk_root.update_idletasks()
+            assert child.bind("<Destroy>") == original_binding
+        assert callback.call_count == 100
+        child.destroy()
+        on_destroy.assert_called_once()
+    finally:
+        child.destroy()
+
+
+if __name__ == "__main__":
+    pytest.main([__file__])

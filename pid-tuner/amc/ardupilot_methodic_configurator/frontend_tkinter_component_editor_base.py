@@ -1,0 +1,829 @@
+#!/usr/bin/env python3
+
+"""
+Component editor GUI that is not data dependent.
+
+This file is part of ArduPilot Methodic Configurator. https://github.com/ArduPilot/MethodicConfigurator
+
+SPDX-FileCopyrightText: 2024-2026 Amilcar do Carmo Lucas <amilcar.lucas@iav.de>
+
+SPDX-License-Identifier: GPL-3.0-or-later
+"""
+
+import tkinter as tk
+from argparse import ArgumentParser, Namespace
+from collections.abc import Callable
+from contextlib import suppress
+from dataclasses import dataclass
+from enum import Enum, auto
+
+# from logging import debug as logging_debug
+from logging import basicConfig as logging_basicConfig
+from logging import info as logging_info
+from platform import system as platform_system
+from tkinter import messagebox, ttk
+from typing import Any, cast
+from unittest.mock import patch
+
+from ardupilot_methodic_configurator import _, __version__
+from ardupilot_methodic_configurator.backend_filesystem import LocalFilesystem
+from ardupilot_methodic_configurator.backend_filesystem_program_settings import ProgramSettings
+from ardupilot_methodic_configurator.common_arguments import add_common_arguments
+from ardupilot_methodic_configurator.data_model_vehicle_components import ComponentDataModel
+from ardupilot_methodic_configurator.data_model_vehicle_components_base import ComponentData, ComponentPath, ComponentValue
+from ardupilot_methodic_configurator.data_model_vehicle_components_json_schema import VehicleComponentsJsonSchema
+from ardupilot_methodic_configurator.frontend_tkinter_base_window import BaseWindow
+from ardupilot_methodic_configurator.frontend_tkinter_component_template_manager import ComponentTemplateManager
+from ardupilot_methodic_configurator.frontend_tkinter_font import get_safe_font_size
+from ardupilot_methodic_configurator.frontend_tkinter_pair_tuple_combobox import PairTupleCombobox
+from ardupilot_methodic_configurator.frontend_tkinter_scroll_frame import ScrollFrame
+from ardupilot_methodic_configurator.frontend_tkinter_show import show_error_message, show_tooltip
+from ardupilot_methodic_configurator.frontend_tkinter_usage_popup_window import ConfirmationPopupWindow, UsagePopupWindow
+from ardupilot_methodic_configurator.frontend_tkinter_usage_popup_windows import (
+    confirm_component_properties,
+    display_component_editor_usage_popup,
+)
+from ardupilot_methodic_configurator.macos_utilities import is_macos_sequoia_or_older
+
+
+def argument_parser() -> Namespace:
+    """
+    Parses command-line arguments for the script.
+
+    This function sets up an argument parser to handle the command-line arguments for the script.
+
+    Returns:
+    argparse.Namespace: An object containing the parsed arguments.
+
+    """
+    # pylint: disable=duplicate-code
+    parser = ArgumentParser(
+        description=_(
+            "A GUI for editing JSON files that contain vehicle component configurations. "
+            "Not to be used directly, but through the main ArduPilot methodic configurator script."
+        )
+    )
+    parser = LocalFilesystem.add_argparse_arguments(parser)
+    parser = ComponentEditorWindowBase.add_argparse_arguments(parser)
+    return add_common_arguments(parser).parse_args()
+    # pylint: enable=duplicate-code
+
+
+# Type aliases to improve code readability
+EntryWidget = ttk.Entry | PairTupleCombobox
+
+WINDOW_WIDTH_PIX = 880
+VEHICLE_IMAGE_WIDTH_PIX = 100
+VEHICLE_IMAGE_HEIGHT_PIX = 100
+
+
+class _EmbeddedScrollFrameStub:  # pylint: disable=too-few-public-methods
+    """
+    Minimal stand-in for ScrollFrame used in embedded component editor mode.
+
+    Provides the ``view_port`` attribute and a no-op ``scroll_to_top()`` method so
+    that callers can use duck typing instead of ``isinstance`` checks.  Without a
+    canvas there is nothing to scroll, hence the no-op.
+    """
+
+    def __init__(self, parent: tk.Widget) -> None:
+        self.view_port: ttk.Frame = ttk.Frame(parent)
+        self.view_port.pack(side="top", fill="both", expand=True)
+
+    def scroll_to_top(self) -> None:
+        """No-op: the embedded stub has no canvas to scroll."""
+
+
+class ComponentEditorCloseAction(Enum):
+    """Describe why the standalone component editor's event loop ended."""
+
+    CONTINUE_WORKFLOW = auto()
+    QUIT_WORKFLOW = auto()
+
+
+@dataclass(frozen=True)
+class ComponentEditorCloseResult:
+    """Outcome reported to the application after the component window closes."""
+
+    action: ComponentEditorCloseAction = ComponentEditorCloseAction.CONTINUE_WORKFLOW
+    exit_code: int = 0
+
+
+class ComponentEditorWindowBase(BaseWindow):  # pylint: disable=too-many-instance-attributes
+    """
+    A class for editing JSON files in the ArduPilot methodic configurator.
+
+    This class provides a graphical user interface for editing JSON files that
+    contain vehicle component configurations. It inherits from the BaseWindow
+    class, which provides basic window functionality.
+    """
+
+    def __init__(  # pylint: disable=too-many-arguments, too-many-positional-arguments
+        self,
+        version: str,
+        local_filesystem: LocalFilesystem,
+        fc_parameters: dict[str, float],
+        data_model: ComponentDataModel | None = None,
+        root_tk: tk.Tk | None = None,
+        embedded_parent_frame: tk.Widget | None = None,
+        on_component_change: Callable[[], None] | None = None,
+    ) -> None:
+        """
+        Initialize the ComponentEditorWindowBase.
+
+        Args:
+            version: Application version string
+            local_filesystem: Filesystem interface for loading/saving data
+            fc_parameters: Flight controller parameters
+            data_model: Optional pre-configured data model (for testing)
+            root_tk: Optional parent Tk window (for testing)
+            embedded_parent_frame: If provided, embed the editor into this frame instead of
+                creating a standalone window. The scroll frame is placed inside this parent.
+            on_component_change: Callback invoked whenever a component field value changes.
+                Only used when embedded_parent_frame is set.
+
+        """
+        self._embedded_parent_frame = embedded_parent_frame
+        self._on_component_change = on_component_change
+        self.close_result = ComponentEditorCloseResult()
+
+        if embedded_parent_frame is None:
+            # Standalone window mode — full BaseWindow initialisation
+            super().__init__(root_tk)
+        else:
+            # Embedded mode — set the same attributes that BaseWindow.__init__ would set,
+            # but reuse the parent frame's top-level window instead of creating a new one.
+            # A future refactor should extract ComponentEditorPanel(ttk.Frame) so that
+            # this class can inherit from BaseWindow unconditionally.
+            self._init_from_parent_frame(embedded_parent_frame)
+
+        # complexity_var must be created after the Tk root exists (either via super().__init__ or embedded_parent_frame)
+        complexity_setting = ProgramSettings.get_setting("gui_complexity")
+        self.complexity_var = tk.StringVar(value=str(complexity_setting) if complexity_setting is not None else "simple")
+
+        self.local_filesystem = local_filesystem
+        self.version = version
+
+        # Initialize the data model - allow injection for testing
+        self.data_model = data_model or self._create_data_model()
+
+        # UI elements dictionary for easier access and testing
+        self.entry_widgets: dict[ComponentPath, EntryWidget] = {}
+        self.scroll_frame: ScrollFrame | _EmbeddedScrollFrameStub
+        self.save_button: ttk.Button
+        self.template_manager: ComponentTemplateManager
+        self._populating: bool = False  # True while populate_frames/populate_single_component is running
+
+        # Initialize UI if there's data to work with
+        if self._check_data():
+            if embedded_parent_frame is None:
+                self._initialize_ui()
+            else:
+                self._initialize_embedded_ui()
+            self._finalize_initialization(fc_parameters)
+
+    def _init_from_parent_frame(self, parent: tk.Widget) -> None:
+        """
+        Initialize the minimum set of BaseWindow attributes from an existing parent frame.
+
+        Called instead of ``super().__init__()`` in embedded mode so that the editor
+        piggybacks on the parent window's root rather than creating a new top-level window.
+        Sets the same attributes (``root``, ``main_frame``, ``dpi_scaling_factor``,
+        ``default_font_size``) that ``BaseWindow.__init__`` would set.
+        """
+        self.root = parent.winfo_toplevel()
+        self.main_frame = parent  # type: ignore[assignment]  # intentionally tk.Widget subtype
+        try:
+            self.dpi_scaling_factor: float = max(1.0, self.root.winfo_fpixels("1i") / 96.0)
+        except (tk.TclError, AttributeError, TypeError):
+            self.dpi_scaling_factor = 1.0
+        self.default_font_size: int = get_safe_font_size()
+
+    def _create_data_model(self) -> ComponentDataModel:
+        """Create the data model. Extracted for better testability."""
+        schema = VehicleComponentsJsonSchema(self.local_filesystem.load_schema())
+        component_datatypes = schema.get_all_value_datatypes()
+        if self._embedded_parent_frame is not None:
+            # In embedded mode reuse the already-loaded in-memory data to avoid re-reading from disk,
+            # which would overwrite vehicle_components_fs.data and lose unsaved changes.
+            raw_data = self.local_filesystem.vehicle_components_fs.data or {}
+        else:
+            raw_data = self.local_filesystem.load_vehicle_components_json_data(self.local_filesystem.vehicle_dir)
+        return ComponentDataModel(raw_data, component_datatypes, schema)
+
+    def _initialize_ui(self) -> None:
+        """Initialize the complete UI. Extracted for better testability."""
+        self._setup_window()
+        self._setup_styles()
+        self._create_intro_frame()
+        self._create_scroll_frame()
+        self._setup_template_manager()
+        self._create_save_frame()
+        self._check_show_usage_instructions()
+
+    def _finalize_initialization(self, fc_parameters: dict[str, float]) -> None:
+        """Finalize initialization after UI setup. Extracted for better testability."""
+        self.data_model.post_init(self.local_filesystem.doc_dict, fc_parameters, self.local_filesystem.file_parameters)
+
+    def _check_data(self) -> bool:
+        """Check if we have data to work with and prepare for UI setup."""
+        if not self.data_model.is_valid_component_data() or not self.data_model.has_components():
+            if getattr(self, "_embedded_parent_frame", None) is None:
+                # Standalone mode — schedule the window to be destroyed after the mainloop has started
+                self.root.after(100, self.root.destroy)
+            return False
+        return True
+
+    def _setup_window(self) -> None:
+        """Setup the main window properties."""
+        self.root.title(
+            _("Amilcar Lucas's - ArduPilot methodic configurator ") + self.version + _(" - Vehicle Component Editor")
+        )
+        self.root.geometry(self.calculate_scaled_geometry(WINDOW_WIDTH_PIX, 600))
+        self.center_window_on_screen(self.root)
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+    def _setup_styles(self) -> None:
+        """Configure the styles for UI elements."""
+        style = ttk.Style()
+        # Tk renders point-based fonts at the correct DPI size automatically;
+        # do not apply calculate_scaled_font_size here as it would double-scale on HiDPI.
+        style.configure(
+            "bigger.TLabel",
+            font=("TkDefaultFont", self.default_font_size),
+        )
+        style.configure("comb_input_invalid.TCombobox", fieldbackground="red")
+        style.configure("comb_input_valid.TCombobox", fieldbackground="white")
+        style.configure("entry_input_invalid.TEntry", fieldbackground="red")
+        style.configure("entry_input_valid.TEntry", fieldbackground="white")
+        style.configure("Optional.TLabelframe", borderwidth=2)
+        style.configure("Optional.TLabelframe.Label", foreground="gray")
+
+    def _create_intro_frame(self) -> None:
+        """Create the introduction frame with explanations and image."""
+        intro_frame = ttk.Frame(self.main_frame)
+        intro_frame.pack(side=tk.TOP, fill="x", expand=False)
+
+        # Add vehicle image first to the right side
+        self._add_vehicle_image(intro_frame)
+
+        # Add explanation text to the left side
+        self._add_explanation_text(intro_frame)
+
+    def _add_explanation_text(self, parent: ttk.Frame) -> None:
+        """Add explanation text to the parent frame."""
+        explanation_frame = ttk.Frame(parent)
+        explanation_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(10, 10), pady=(10, 0))
+
+        # Add UI complexity combobox
+        complexity_frame = ttk.Frame(explanation_frame)
+        complexity_frame.pack(side=tk.TOP, anchor=tk.NW, padx=(0, 10))
+
+        complexity_label = ttk.Label(complexity_frame, text=_("GUI Complexity:"))
+        complexity_label.pack(side=tk.LEFT, padx=(0, 5))
+
+        complexity_setting = ProgramSettings.get_setting("gui_complexity")
+        self.complexity_var.set(str(complexity_setting) if complexity_setting is not None else "simple")
+
+        complexity_combobox = ttk.Combobox(
+            complexity_frame, textvariable=self.complexity_var, values=["simple", "normal"], state="readonly", width=10
+        )
+        complexity_combobox.pack(side=tk.LEFT)
+        complexity_combobox.bind("<<ComboboxSelected>>", self._on_complexity_changed)
+
+        # Add tooltip
+        show_tooltip(
+            complexity_combobox,
+            _(
+                "Select the graphical user interface complexity level:\n"
+                "simple for beginners, only minimal mandatory fields no optional params displayed\n"
+                "normal for everybody else."
+            ),
+        )
+
+        explanation_text = _("Labels for optional properties are displayed in gray text.\n")
+        explanation_text += _("Scroll down to ensure that you do not overlook any properties.\n")
+
+        explanation_label = ttk.Label(
+            explanation_frame, text=explanation_text, wraplength=WINDOW_WIDTH_PIX - VEHICLE_IMAGE_WIDTH_PIX, justify=tk.LEFT
+        )
+        explanation_label.configure(style="bigger.TLabel")
+        explanation_label.pack(side=tk.TOP, anchor=tk.NW, pady=self.calculate_scaled_padding_tuple(10, 0))
+
+    def _on_complexity_changed(self, _event: tk.Event | None = None) -> None:
+        """Handle complexity combobox change."""
+        old_gui_complexity = ProgramSettings.get_setting("gui_complexity")
+        new_gui_complexity = self.complexity_var.get()
+        if new_gui_complexity != old_gui_complexity:
+            ProgramSettings.set_setting("gui_complexity", new_gui_complexity)
+            self._refresh_component_display()
+
+    def _refresh_component_display(self) -> None:
+        """Refresh the component display UI."""
+        # Clear all widgets from the scroll frame
+        for widget in self.scroll_frame.view_port.winfo_children():
+            widget.destroy()
+
+        # Clear the entry_widgets dictionary since all widgets have been destroyed
+        self.entry_widgets.clear()
+
+        # Repopulate the frame with widgets according to the new complexity setting
+        self.populate_frames()
+
+        # Update the UI
+        if not is_macos_sequoia_or_older():
+            self.scroll_frame.view_port.update_idletasks()
+
+    def _add_vehicle_image(self, parent: ttk.Frame) -> None:
+        """Add the vehicle image to the parent frame."""
+        if self.local_filesystem.vehicle_image_exists():
+            image_label = self.put_image_in_label(
+                parent, self.local_filesystem.vehicle_image_filepath(), VEHICLE_IMAGE_HEIGHT_PIX
+            )
+            image_label.pack(side=tk.RIGHT, anchor=tk.NE, padx=(4, 4), pady=(4, 0))
+            show_tooltip(image_label, _("Replace the vehicle.jpg file in the vehicle directory to change the vehicle image."))
+        else:
+            image_label = ttk.Label(parent, text=_("Add a 'vehicle.jpg' image file to the vehicle directory."))
+            image_label.pack(side=tk.RIGHT, anchor=tk.NE, padx=(4, 4), pady=(4, 0))
+
+    def _initialize_embedded_ui(self) -> None:
+        """Initialize a lightweight UI for embedded (non-standalone) mode."""
+        self._setup_styles()
+        self._create_scroll_frame(embedded=True)
+        self._setup_template_manager()
+
+    def _create_scroll_frame(self, embedded: bool = False) -> None:
+        """Create the scrollable frame for component widgets."""
+        if embedded:
+            # In embedded mode use a plain stub — no canvas, no scrolling.
+            # scroll_to_top() is a no-op on the stub so callers need no isinstance guard.
+            self.scroll_frame = _EmbeddedScrollFrameStub(self.main_frame)
+        else:
+            self.scroll_frame = ScrollFrame(self.main_frame)
+            self.scroll_frame.pack(side="top", fill="both", expand=True)
+
+    def _create_save_frame(self) -> None:
+        """Create the frame with save button."""
+        save_frame = ttk.Frame(self.main_frame)
+        save_frame.pack(side=tk.TOP, fill="x", expand=False)
+
+        self.save_button = ttk.Button(save_frame, text=_("Save data and start configuration"), command=self.on_save_pressed)
+        show_tooltip(
+            self.save_button,
+            _("Save component data to the vehicle_components.json file\nand start parameter value configuration and tuning."),
+        )
+        self.save_button.pack(pady=7)
+
+    def _setup_template_manager(self) -> None:
+        """Set up the component template manager."""
+
+        def update_data_callback(comp_name: str, template_data: dict) -> None:
+            self.data_model.update_component(comp_name, template_data)
+
+        self.template_manager = ComponentTemplateManager(
+            self.root,
+            self.entry_widgets,
+            self.get_component_data_from_gui,
+            update_data_callback,
+            self.data_model.derive_initial_template_name,
+            self.local_filesystem.save_component_to_system_templates,
+        )
+
+    def _check_show_usage_instructions(self) -> None:
+        """Check if usage instructions should be displayed."""
+        if UsagePopupWindow.should_display("component_editor"):
+            # Cast to Tk since we know root is a Tk instance in this context
+            self.root.after(1, lambda: display_component_editor_usage_popup(cast("tk.Tk", self.root)))
+
+    def set_component_value_and_update_ui(self, path: ComponentPath, value: str) -> None:
+        """Set a component value and update the UI to reflect it."""
+        self._set_component_value(path, value)
+        self._update_widget_value(path, value)
+
+    def _set_component_value(self, path: ComponentPath, value: str) -> None:
+        """Set component value in data model."""
+        self.data_model.set_component_value(path, value)
+
+    def set_vehicle_configuration_template(self, configuration_template: str) -> None:
+        """Set the configuration template name in the data."""
+        self.data_model.set_configuration_template(configuration_template)
+
+    def set_values_from_fc_parameters(self, fc_parameters: dict[str, float], doc: dict[str, Any]) -> None:
+        """
+        Process flight controller parameters and update the data model.
+
+        This delegates to the data model's process_fc_parameters method to handle
+        all the business logic of processing parameters.
+        """
+        # Delegate to the data model for parameter processing
+        self.data_model.process_fc_parameters(fc_parameters, doc)
+
+    def _update_widget_value(self, path: ComponentPath, value: str) -> None:
+        """Update widget value in UI."""
+        if path in self.entry_widgets:
+            entry = self.entry_widgets[path]
+            entry.delete(0, tk.END)
+            entry.insert(0, value)
+            entry.config(state="disabled")
+
+    @staticmethod
+    def set_combobox_entries_preserving_width(
+        combobox: PairTupleCombobox, entries: list[tuple[str, str]], selection: str | None
+    ) -> None:
+        """Set combobox entries while preserving the currently configured widget width."""
+        width: int | None = None
+        try:
+            width = int(combobox.cget("width"))
+        except (AttributeError, TypeError, ValueError, tk.TclError):
+            # Test doubles may not have a live Tk backend; skip width preservation in that case.
+            width = None
+        combobox.set_entries_tuple(entries, selection)
+        if width is not None:
+            with suppress(AttributeError, tk.TclError):
+                combobox.config(width=width)
+
+    def populate_frames(self) -> None:
+        """Populates the ScrollFrame with widgets based on the JSON data."""
+        self._populating = True
+        try:
+            components = self.data_model.get_all_components()
+            for i, (key, value) in enumerate(components.items(), 1):
+                self.add_widget(self.scroll_frame.view_port, key, value, [])
+                if i % 5 == 0 and not is_macos_sequoia_or_older():
+                    # Yield periodically on platforms where Tk can safely process
+                    # idle callbacks while widgets are being built. Tcl/Tk 9 on
+                    # macOS can segfault during this re-entrant rendering path.
+                    self.scroll_frame.view_port.update_idletasks()
+        finally:
+            self._populating = False
+
+        # Scroll to the top after (re-)populating
+        self.scroll_frame.scroll_to_top()
+
+    def populate_single_component(self, component_name: str) -> None:
+        """
+        Populate the scroll frame with widgets for a single named component.
+
+        Used in embedded mode to display only the component relevant to the current
+        configuration step without showing all components. The outer container already
+        carries the component label, so child properties are rendered directly into the
+        viewport to avoid a duplicate labelled frame.
+        """
+        self._populating = True
+        try:
+            components = self.data_model.get_all_components()
+            if component_name not in components:
+                return
+            component_data = components[component_name]
+            if isinstance(component_data, dict):
+                # Add template controls directly into the viewport (no outer LabelFrame)
+                self._add_template_controls(self.scroll_frame.view_port, component_name)
+                for sub_key, sub_value in component_data.items():
+                    self._add_widget(self.scroll_frame.view_port, sub_key, sub_value, [component_name])
+            else:
+                self.add_widget(self.scroll_frame.view_port, component_name, component_data, [])
+            if not is_macos_sequoia_or_older():
+                self.scroll_frame.view_port.update_idletasks()
+        finally:
+            self._populating = False
+        self.scroll_frame.scroll_to_top()
+
+    def _trigger_change_callback(self) -> None:
+        """Invoke the on_component_change callback if one was registered (embedded mode only)."""
+        if self._populating:
+            return  # suppress events fired during programmatic widget population
+        if self._on_component_change is not None:
+            self._on_component_change()
+
+    def get_component_data(self) -> "ComponentData":
+        """Return the current in-memory component data from the data model."""
+        return self.data_model.get_component_data()
+
+    def add_widget(self, parent: tk.Widget, key: str, value: ComponentValue, path: list[str]) -> None:
+        """
+        Adds a widget to the parent widget with the given key and value.
+
+        Public version for better testability.
+        """
+        self._add_widget(parent, key, value, path)
+
+    def _add_widget(self, parent: tk.Widget, key: str, value: ComponentValue, path: list[str]) -> None:
+        """
+        Adds a widget to the parent widget with the given key and value.
+
+        Args:
+            parent (tkinter.Widget): The parent widget to which the LabelFrame/Entry will be added.
+            key (str): The key for the LabelFrame/Entry.
+            value (dict|float): The value associated with the key.
+            path (list): The path to the current key in the JSON data.
+
+        """
+        # Skip components that shouldn't be displayed in simple mode
+        if isinstance(value, dict) and not self.data_model.should_display_in_simple_mode(
+            key, value, path, self.complexity_var.get()
+        ):
+            return
+
+        # For leaf nodes in simple mode, check if they are optional
+        if not isinstance(value, dict) and not self.data_model.should_display_leaf_in_simple_mode(
+            (*path, key), self.complexity_var.get()
+        ):
+            return
+
+        if isinstance(value, dict):  # JSON non-leaf elements, add LabelFrame widget
+            self._add_non_leaf_widget(parent, key, value, path)
+        else:  # JSON leaf elements, add Entry widget
+            self._add_leaf_widget(parent, key, value, path)
+
+    def _prepare_non_leaf_widget_config(self, key: str, value: dict, path: list[str]) -> dict:
+        """Prepare configuration for non-leaf widget creation. Delegates to display logic."""
+        return self.data_model.prepare_non_leaf_widget_config(key, value, path)
+
+    def _create_non_leaf_widget_ui(self, parent: tk.Widget, config: dict) -> ttk.LabelFrame:
+        """Create the UI elements for a non-leaf widget. Separated for better testability."""
+        if config["is_optional"]:
+            frame = ttk.LabelFrame(parent, text=_(config["key"]), style="Optional.TLabelframe")
+        else:
+            frame = ttk.LabelFrame(parent, text=_(config["key"]))
+
+        frame.pack(
+            fill=tk.X,
+            side=tk.TOP if config["is_toplevel"] else tk.LEFT,
+            pady=5 if config["is_toplevel"] else 3,
+            padx=5,
+            anchor=tk.NW if config["is_toplevel"] else tk.N,
+        )
+
+        # Add tooltip based on schema description
+        if config["description"]:
+            show_tooltip(frame, config["description"], position_below=False)
+
+        return frame
+
+    def _add_non_leaf_widget(self, parent: tk.Widget, key: str, value: dict, path: list[str]) -> None:
+        """Add a non-leaf widget (frame containing other widgets) to the UI."""
+        # Extract business logic to separate method for better testability
+        widget_config = self._prepare_non_leaf_widget_config(key, value, path)
+        frame = self._create_non_leaf_widget_ui(parent, widget_config)
+
+        if widget_config["is_toplevel"] and key in self.data_model.get_all_components():
+            self._add_template_controls(frame, key)
+
+        for sub_key, sub_value in value.items():
+            # recursively add child elements
+            self._add_widget(frame, sub_key, sub_value, [*path, key])
+
+    def _add_leaf_widget(self, parent: tk.Widget, key: str, value: str | float, path: list[str]) -> None:
+        """Add a leaf widget (containing input controls) to the UI."""
+        # Extract business logic to separate method for better testability
+        widget_config = self._prepare_leaf_widget_config(key, value, path)
+        self._create_leaf_widget_ui(parent, widget_config)
+
+    def _prepare_leaf_widget_config(self, key: str, value: str | float, path: list[str]) -> dict:
+        """Prepare configuration for leaf widget creation. Delegates to display logic."""
+        return self.data_model.prepare_leaf_widget_config(key, value, path)
+
+    def _create_leaf_widget_ui(self, parent: tk.Widget, config: dict) -> None:
+        """Create the UI elements for a leaf widget. Separated for better testability."""
+        entry_frame = ttk.Frame(parent)
+        entry_frame.pack(side=tk.TOP, fill=tk.X, pady=(0, 5))
+
+        label = ttk.Label(entry_frame, text=_(config["key"]), foreground="gray" if config["is_optional"] else "black")
+        label.pack(side=tk.LEFT)
+
+        entry = self.add_entry_or_combobox(config["value"], entry_frame, config["path"], config["is_optional"])
+        entry.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 5))
+
+        # Store the entry widget in the entry_widgets Dictionary for later retrieval
+        self.entry_widgets[config["path"]] = entry
+
+        # Add tooltip based on schema description
+        if config["description"]:
+            show_tooltip(label, config["description"])
+            show_tooltip(entry, config["description"])
+
+    def _add_template_controls(self, parent_frame: tk.Widget, component_name: str) -> None:
+        """Add template controls for a component."""
+        if self.complexity_var.get() != "simple":
+            self.template_manager.add_template_controls(parent_frame, component_name)
+
+    def get_component_data_from_gui(self, component_name: str) -> ComponentData:
+        """Extract component data from GUI elements."""
+        # Get all entry widget values as a dictionary
+        # For PairTupleCombobox, get the selected key; for ttk.Entry, get the text
+        entry_values = {}
+        for path, entry in self.entry_widgets.items():
+            if isinstance(entry, PairTupleCombobox):
+                # Get the internal key value for PairTupleCombobox
+                entry_values[path] = entry.get_selected_key() or ""
+            elif isinstance(entry, ttk.Entry) or (hasattr(entry, "get") and callable(entry.get)):
+                # Get the text value for Entry widgets or any object with a get() method (including mocks)
+                entry_values[path] = entry.get()
+
+        # Use the data model to extract and process the component data
+        return self.data_model.extract_component_data_from_entries(component_name, entry_values)
+
+    def validate_data_and_highlight_errors_in_red(self) -> str:
+        """Validate all data using the data model."""
+        # Collect all entry values
+        # For PairTupleCombobox, get the selected key; for ttk.Entry, get the text
+        entry_values = {
+            path: entry.get_selected_key() or "" if isinstance(entry, PairTupleCombobox) else entry.get()
+            for path, entry in self.entry_widgets.items()
+            if isinstance(entry, (PairTupleCombobox, ttk.Entry))
+        }
+
+        # Use data model for validation
+        is_valid, errors = self.data_model.validate_all_data(entry_values)
+
+        if not is_valid:
+            # Update UI to show invalid states and display errors
+            for path, entry in self.entry_widgets.items():
+                if isinstance(entry, PairTupleCombobox):
+                    value = entry.get_selected_key() or ""
+                    # Check combobox validation
+                    if value not in entry.list_keys:
+                        entry.configure(style="comb_input_invalid.TCombobox")
+                    else:
+                        entry.configure(style="comb_input_valid.TCombobox")
+                elif isinstance(entry, ttk.Entry):
+                    value = entry.get()
+                    # Check entry validation
+                    error_message, _corr = self.data_model.validate_entry_limits(value, path)
+                    if error_message:
+                        entry.configure(style="entry_input_invalid.TEntry")
+                    else:
+                        entry.configure(style="entry_input_valid.TEntry")
+
+            # Show first few errors
+            error_message = "\n".join(errors[:3])  # Show first 3 errors
+            if len(errors) > 3:
+                error_message += f"\n... and {len(errors) - 3} more errors"
+            show_error_message(_("Validation Errors"), error_message)
+            return _("Validation failed. Please correct the errors before saving.")
+
+        return ""
+
+    def on_save_pressed(self) -> None:
+        """Validate component data, save the component JSON file and close the window."""
+        error_msg = self.validate_data_and_highlight_errors_in_red()
+        if error_msg:
+            show_error_message(_("Error"), error_msg)
+            return
+        if (not ConfirmationPopupWindow.should_display("component_editor_validation")) or confirm_component_properties(
+            cast("tk.Tk", self.root)
+        ):
+            save_error = self.save_component_json()
+            if save_error is False:
+                self.root.destroy()
+
+    def save_component_json(self) -> bool:
+        """Save component JSON data to file."""
+        try:
+            save_result = self._perform_file_save()
+        except Exception as exc:  # pylint: disable=broad-except # Catch unexpected exceptions and present them as a save error
+            # Convert exception into the expected save_result shape: (is_error: bool, message: str)
+            save_result = (True, str(exc))
+        return self._handle_save_result(save_result)
+
+    def _perform_file_save(self) -> tuple[bool, str]:
+        """Perform file save operation."""
+        return self.data_model.save_to_filesystem(self.local_filesystem)
+
+    def _handle_save_result(self, save_result: tuple[bool, str]) -> bool:
+        """Handle save operation result."""
+        if save_result[0]:
+            show_error_message(_("Error"), _("Failed to save data to file.") + "\n" + save_result[1])
+            ret = True
+        else:
+            logging_info(_("Vehicle component data saved successfully."))
+            ret = False
+
+        return ret
+
+    def on_closing(self) -> None:
+        """Handle window closing event."""
+        answer = messagebox.askyesnocancel(_("Save Changes?"), _("Do you want to save the changes before closing?"))
+
+        if answer is None:  # Cancel was clicked
+            return
+
+        ret = False
+        if answer:
+            ret = self.save_component_json()
+            if ret:
+                return
+        else:
+            # If it just created the files from a new template and the user chooses not to save,
+            # delete the created files
+            if self.data_model.is_new_project():
+                # remove the files created
+                err_msg = self.local_filesystem.remove_created_files_and_vehicle_dir()
+                if err_msg:
+                    show_error_message(_("Error"), err_msg)
+                    ret = True
+            logging_info(_("Changes discarded. No data saved."))
+        # Report this close decision; the application chooses whether to end the workflow.
+        self.root.destroy()
+        self.close_result = ComponentEditorCloseResult(ComponentEditorCloseAction.QUIT_WORKFLOW, int(ret))
+
+    # This function will be overwritten in child classes
+    def add_entry_or_combobox(
+        self,
+        value: str | float,
+        entry_frame: ttk.Frame,
+        _path: ComponentPath,
+        is_optional: bool = False,  # pylint: disable=unused-argument # noqa: ARG002
+    ) -> EntryWidget:
+        """Create an entry widget for input values."""
+        entry = ttk.Entry(entry_frame)
+        entry.insert(0, str(value))
+        return entry
+
+    @staticmethod
+    def add_argparse_arguments(parser: ArgumentParser) -> ArgumentParser:
+        """Keep the component editor's parser extension point available."""
+        return parser
+
+    @classmethod
+    def create_for_testing(
+        cls,
+        version: str = "test",
+        local_filesystem: LocalFilesystem | None = None,
+        data_model: ComponentDataModel | None = None,
+        root_tk: tk.Tk | None = None,  # pylint: disable=unused-argument # noqa: ARG003
+    ) -> "ComponentEditorWindowBase":
+        """
+        Factory method for creating instances suitable for testing.
+
+        This method provides a convenient way to create instances with minimal
+        dependencies for testing purposes.
+
+        Args:
+            version: Application version string
+            local_filesystem: Optional filesystem interface
+            data_model: Optional pre-configured data model
+            root_tk: Optional parent Tk window
+
+        Returns:
+            ComponentEditorWindowBase instance configured for testing
+
+        """
+        # Import MagicMock at the method level to avoid import issues
+        from unittest.mock import MagicMock  # pylint: disable=import-outside-toplevel # noqa: PLC0415
+
+        if local_filesystem is None:
+            # Create a minimal mock filesystem for testing
+            local_filesystem = MagicMock(spec=LocalFilesystem)
+            local_filesystem.vehicle_dir = "test_vehicle"
+            local_filesystem.doc_dict = {}
+            local_filesystem.load_vehicle_components_json_data.return_value = {}
+            local_filesystem.load_schema.return_value = {}
+
+        # Patch the BaseWindow initialization to avoid Tkinter dependencies
+        with patch("ardupilot_methodic_configurator.frontend_tkinter_component_editor_base.BaseWindow.__init__"):
+            instance = cls.__new__(cls)
+
+            # Manually initialize the essential attributes without calling BaseWindow.__init__
+            instance.local_filesystem = local_filesystem
+            instance.version = version
+            instance._embedded_parent_frame = None  # noqa: SLF001
+            instance._on_component_change = None  # noqa: SLF001
+            instance.close_result = ComponentEditorCloseResult()
+            instance._populating = False  # noqa: SLF001
+
+            # Create mock UI elements to avoid Tkinter dependencies
+            instance.root = MagicMock()
+            instance.main_frame = MagicMock()
+
+            # Initialize the data model - allow injection for testing
+            instance.data_model = data_model or instance._create_data_model()  # noqa: SLF001
+
+            # Initialize UI elements dictionary for easier access and testing
+            instance.entry_widgets = {}
+            instance.scroll_frame = MagicMock()
+            instance.save_button = MagicMock()
+            instance.template_manager = MagicMock()
+            instance.complexity_var = MagicMock()
+            instance.default_font_size = 9 if platform_system() == "Windows" else -12
+            instance.dpi_scaling_factor = 1.0
+
+            return instance
+
+
+if __name__ == "__main__":  # pragma: no cover
+    args = argument_parser()
+
+    logging_basicConfig(level=args.loglevel, format="%(asctime)s - %(levelname)s - %(message)s")
+
+    filesystem = LocalFilesystem(
+        args.vehicle_dir, args.vehicle_type, "", args.allow_editing_template_files, args.save_component_to_system_templates
+    )
+    component_editor_window = ComponentEditorWindowBase(__version__, filesystem, {})
+
+    component_editor_window.populate_frames()
+    # component_editor_window.validate_data()
+
+    component_editor_window.root.mainloop()
+    if component_editor_window.close_result.action is ComponentEditorCloseAction.QUIT_WORKFLOW:
+        raise SystemExit(component_editor_window.close_result.exit_code)

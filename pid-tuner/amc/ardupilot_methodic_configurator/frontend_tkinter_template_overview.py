@@ -1,0 +1,481 @@
+#!/usr/bin/env python3
+
+"""
+Vehicle template overview GUI.
+
+This file is part of ArduPilot Methodic Configurator. https://github.com/ArduPilot/MethodicConfigurator
+
+SPDX-FileCopyrightText: 2024-2026 Amilcar do Carmo Lucas <amilcar.lucas@iav.de>
+
+SPDX-License-Identifier: GPL-3.0-or-later
+"""
+
+import argparse
+import contextlib
+import tkinter as tk
+from logging import basicConfig as logging_basicConfig
+from logging import info as logging_info
+from tkinter import font as tkfont
+from tkinter import messagebox, ttk
+from typing import Protocol
+
+from ardupilot_methodic_configurator import _, __version__
+from ardupilot_methodic_configurator.backend_filesystem_program_settings import ProgramSettings
+from ardupilot_methodic_configurator.backend_filesystem_vehicle_components import VehicleComponents
+from ardupilot_methodic_configurator.common_arguments import add_common_arguments
+from ardupilot_methodic_configurator.data_model_template_overview import TemplateOverview
+from ardupilot_methodic_configurator.frontend_tkinter_base_window import BaseWindow
+from ardupilot_methodic_configurator.frontend_tkinter_rich_text import get_widget_font_family_and_size
+
+
+class VehicleComponentsProviderProtocol(Protocol):
+    """Minimal protocol for vehicle components provider - only methods used by TemplateOverviewWindow."""
+
+    @staticmethod
+    def get_vehicle_components_overviews() -> dict[str, TemplateOverview]:
+        """Get vehicle components overviews."""
+        ...
+
+    @staticmethod
+    def get_vehicle_image_filepath(relative_template_path: str) -> str:
+        """Get vehicle image filepath."""
+        ...
+
+
+class ProgramSettingsProviderProtocol(Protocol):  # pylint: disable=too-few-public-methods
+    """Minimal protocol for program settings provider - only methods used by TemplateOverviewWindow."""
+
+    @staticmethod
+    def store_template_dir(relative_template_dir: str) -> None:
+        """Store template directory."""
+        ...
+
+
+IMAGE_HEIGHT_PX = 100
+
+
+class TemplateOverviewWindow(BaseWindow):  # pylint: disable=too-many-instance-attributes
+    """
+    Represents the window for viewing and managing ArduPilot vehicle templates.
+
+    This class creates a graphical user interface (GUI) window that displays an overview of available vehicle templates.
+    Users can browse through different templates, view their attributes, and perform actions such as storing a template
+    directory for further configuration. The window utilizes a Treeview widget to present the templates in a structured
+    manner, making it easier for users to navigate and select the desired template for configuration.
+
+    Attributes:
+        sort_column (str): The column currently being used for sorting
+        tree (ttk.Treeview): The treeview widget displaying templates
+        image_label (ttk.Label): Label for displaying vehicle images
+        top_frame (ttk.Frame): Top frame containing instructions and image
+        vehicle_components_provider: Provider for vehicle components data
+        program_settings_provider: Provider for program settings operations
+
+    """
+
+    def __init__(
+        self,
+        parent: tk.Tk | None = None,
+        vehicle_components_provider: VehicleComponentsProviderProtocol | None = None,
+        program_settings_provider: ProgramSettingsProviderProtocol | None = None,
+        connected_fc_vehicle_type: str | None = None,
+        current_template_dir: str | None = None,
+    ) -> None:
+        """
+        Initialize the TemplateOverviewWindow.
+
+        Args:
+            parent: Optional parent Tk window
+            vehicle_components_provider: Optional provider for vehicle components (for dependency injection)
+            program_settings_provider: Optional provider for program settings (for dependency injection)
+            connected_fc_vehicle_type: Optional firmware type of connected flight controller for filtering templates
+            current_template_dir: Optional currently selected template directory to preselect in the list
+
+        """
+        super().__init__(parent)
+
+        # Dependency injection for better testability
+        self.vehicle_components_provider: VehicleComponentsProviderProtocol = vehicle_components_provider or VehicleComponents
+        self.program_settings_provider: ProgramSettingsProviderProtocol = program_settings_provider or ProgramSettings
+
+        self.image_label: ttk.Label
+        # Initialize sorting state
+        self.sort_column: str = ""
+        # True only when the user confirmed a selection via double-click
+        self.user_made_selection: bool = False
+        # Template that was selected when the window opened (used to revert on cancel)
+        self._original_template_relative_path: str = ""
+        # Last template path highlighted via single-click (empty if none)
+        self._single_click_path: str = ""
+
+        # Initialize UI configuration
+        self._configure_window()
+        self._initialize_ui_components()
+        self._setup_layout()
+        self._configure_treeview(connected_fc_vehicle_type or "")
+        self._bind_events()
+        if current_template_dir:
+            self._preselect_current_template(current_template_dir)
+
+    def _configure_window(self) -> None:
+        """Configure the main window properties."""
+        title = _("Amilcar Lucas's - ArduPilot methodic configurator {version} - Template Overview and selection")
+        self.root.title(title.format(version=__version__))
+
+        # Scale window geometry for HiDPI displays
+        self.root.geometry(self.calculate_scaled_geometry(1200, 600))
+        self.center_window_on_screen(self.root)
+
+    def _initialize_ui_components(self) -> None:
+        """Initialize UI components with proper scaling."""
+        # Initialize frames
+        self.top_frame = ttk.Frame(self.main_frame)
+
+        # Initialize instruction label
+        instruction_text = self._get_instruction_text()
+        # Tk renders point-based fonts at the correct size for the current DPI automatically;
+        # do not apply calculate_scaled_font_size here as it would double-scale.
+        font_family, font_size = get_widget_font_family_and_size(self.main_frame)
+        self.instruction_label = ttk.Label(self.top_frame, text=instruction_text, font=(font_family, font_size))
+
+        # Initialize image label
+        self.image_label = ttk.Label(self.top_frame)
+
+        # Initialize treeview with scrollbar
+        self.tree_frame = ttk.Frame(self.main_frame)
+        columns = TemplateOverview.columns()
+        self.tree = ttk.Treeview(self.tree_frame, columns=columns, show="headings")
+
+        # Create vertical scrollbar
+        self.scrollbar = ttk.Scrollbar(self.tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
+        self.tree.configure(yscrollcommand=self.scrollbar.set)
+
+    def _get_instruction_text(self) -> str:
+        """Get the instruction text for the user interface."""
+        instruction_text = _("Double-click the template below that best matches your vehicle's components.")
+        instruction_text += _("\nDon't worry about finding a perfect match - choose the closest one available.")
+        instruction_text += _(
+            "\nIf unsure, select the 'empty' template for your firmware version (provides minimal starting configuration)."
+        )
+        return instruction_text
+
+    def _setup_layout(self) -> None:
+        """Setup the layout of UI components."""
+        # Pack instruction label
+        scaled_pady = self.calculate_scaled_padding_tuple(10, 20)
+        self.instruction_label.pack(side=tk.LEFT, pady=scaled_pady)
+
+        # Pack image label
+        scaled_padx = self.calculate_scaled_padding_tuple(20, 20)
+        self.image_label.pack(side=tk.RIGHT, anchor=tk.NE, padx=scaled_padx)
+
+        # Reserve enough room for either the instructions or an image plus the
+        # label's four-pixel border, then keep later image changes from moving the tree.
+        header_height = max(
+            self.instruction_label.winfo_reqheight() + sum(scaled_pady),
+            int(IMAGE_HEIGHT_PX * self.dpi_scaling_factor) + 4,
+        )
+        self.top_frame.configure(height=header_height)
+        self.top_frame.pack(side=tk.TOP, fill="x", expand=False)
+        self.top_frame.pack_propagate(flag=False)
+
+        # Pack tree frame
+        self.tree_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Pack treeview and scrollbar within tree frame
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+    def run_app(self) -> None:
+        """Run the TemplateOverviewWindow application."""
+        if isinstance(self.root, tk.Toplevel):
+            with contextlib.suppress(tk.TclError):
+                self.root.wait_window()
+        elif isinstance(self.root, tk.Tk):
+            self.root.mainloop()
+
+    def _configure_treeview(self, connected_fc_vehicle_type: str) -> None:
+        """Configure the treeview with styling and data."""
+        self._setup_treeview_style()
+        self._setup_treeview_columns()
+        self._populate_treeview(connected_fc_vehicle_type)
+        self._adjust_treeview_column_widths()
+
+    def _setup_treeview_style(self) -> None:
+        """Setup treeview styling with DPI scaling."""
+        style = ttk.Style(self.root)
+        # Add padding to Treeview heading style
+        style.layout(
+            "Treeview.Heading",
+            [
+                ("Treeview.Heading.cell", {"sticky": "nswe"}),
+                (
+                    "Treeview.Heading.border",
+                    {
+                        "sticky": "nswe",
+                        "children": [
+                            (
+                                "Treeview.Heading.padding",
+                                {
+                                    "sticky": "nswe",
+                                    "children": [
+                                        ("Treeview.Heading.image", {"side": "right", "sticky": ""}),
+                                        ("Treeview.Heading.text", {"sticky": "we"}),
+                                    ],
+                                },
+                            )
+                        ],
+                    },
+                ),
+            ],
+        )
+        # TTK padding values are in Tk's logical coordinate system which already
+        # accounts for DPI on modern platforms; use fixed base values.
+        style.configure("Treeview.Heading", padding=[2, 2, 2, 18], justify="center")
+
+        # Explicitly pin the Treeview row font to TkDefaultFont at the system's
+        # default size.  Without this the alt theme can inherit a larger font from
+        # the Windows system font, making rows look too big.
+        style.configure("Treeview", font=("TkDefaultFont", self.default_font_size))
+        self.tree.tag_configure("striped", background="#eeeeee")
+
+    def _setup_treeview_columns(self) -> None:
+        """Setup treeview column headers."""
+        for col in self.tree["columns"]:
+            self.tree.heading(col, text=col)
+
+    def _populate_treeview(self, connected_fc_vehicle_type: str) -> None:
+        """
+        Populate the treeview with data from vehicle components.
+
+        Args:
+            connected_fc_vehicle_type: Optional firmware type to filter templates by
+
+        """
+        visible_row_index = 0
+        for key, template_overview in self.vehicle_components_provider.get_vehicle_components_overviews().items():
+            attribute_names = template_overview.attributes()
+            values = (key, *(getattr(template_overview, attr, "") for attr in attribute_names))
+            if connected_fc_vehicle_type and not key.startswith(connected_fc_vehicle_type):
+                continue
+            tags = ("striped",) if visible_row_index % 2 else ()
+            self.tree.insert("", "end", text=key, values=values, tags=tags)
+            visible_row_index += 1
+
+    def _preselect_current_template(self, current_template_dir: str) -> None:
+        """
+        Select and scroll to the row that matches the currently active template directory.
+
+        Args:
+            current_template_dir: Absolute or relative path of the currently selected template
+
+        """
+        norm = current_template_dir.replace("\\", "/")
+        for item_id in self.tree.get_children():
+            key = self.tree.item(item_id)["text"].replace("\\", "/")
+            if norm.endswith(key):
+                self._original_template_relative_path = key
+                self.tree.selection_set(item_id)
+                self.tree.see(item_id)
+                break
+
+    def _adjust_treeview_column_widths(self) -> None:
+        """Adjusts the column widths of the Treeview to fit the contents of each column."""
+        # Use the actual Treeview style font so measurements match what is rendered.
+        # font.measure() returns widths in Tk's own coordinate system, the same system
+        # tree.column(width=...) uses, so dpi_scaling_factor must NOT be applied here.
+        treeview_font_name = ttk.Style().lookup("Treeview", "font") or "TkDefaultFont"
+        tree_font = tkfont.Font(font=treeview_font_name)
+
+        for col in self.tree["columns"]:
+            max_width = 0
+            for subtitle in col.title().split("\n"):
+                max_width = max(max_width, tree_font.measure(subtitle))
+
+            # Iterate over all rows and update the max_width if a wider entry is found
+            for item in self.tree.get_children():
+                item_text = self.tree.item(item, "values")[self.tree["columns"].index(col)]
+                max_width = max(max_width, tree_font.measure(str(item_text)))
+
+            # Update the column's width property to accommodate the largest text width
+            self.tree.column(col, width=int(min(max_width * 0.6 + 10, 300)))
+
+    def _bind_events(self) -> None:
+        """Bind events to the treeview."""
+        self.tree.bind("<ButtonRelease-1>", self._on_row_selection_change)
+        self.tree.bind("<Up>", self._on_row_selection_change)
+        self.tree.bind("<Down>", self._on_row_selection_change)
+        self.tree.bind("<Double-1>", self._on_row_double_click)
+        self.root.protocol("WM_DELETE_WINDOW", self._on_window_close)
+
+        for col in self.tree["columns"]:
+            col_str = str(col)
+            self.tree.heading(
+                col_str,
+                text=col_str,
+                command=lambda col2=col_str: self._sort_by_column(col2, reverse=False),  # type: ignore[misc]
+            )
+
+    def _on_row_selection_change(self, _event: tk.Event) -> None:
+        """Handle row single-click event."""
+        self.root.after(0, self._update_selection)
+
+    def _update_selection(self) -> None:
+        """Update selection after keypress event."""
+        selected_item = self.tree.selection()
+        if selected_item:
+            item_id = selected_item[0]
+            selected_template_relative_path = self.tree.item(item_id)["text"]
+            self._single_click_path = selected_template_relative_path
+            self.store_template_dir(selected_template_relative_path)
+            self._display_vehicle_image(selected_template_relative_path)
+
+    def store_template_dir(self, template_path: str) -> None:
+        """
+        Store the selected template directory.
+
+        This method is separated from the UI event handler to improve testability.
+
+        Args:
+            template_path: The path to store
+
+        """
+        self.program_settings_provider.store_template_dir(template_path)
+
+    def _on_row_double_click(self, event: tk.Event) -> None:
+        """Handle row double-click event."""
+        item_id = self.tree.identify_row(event.y)
+        if item_id:
+            selected_template_relative_path = self.tree.item(item_id)["text"]
+            self.store_template_dir(selected_template_relative_path)
+            self.user_made_selection = True
+            self.close_window()
+
+    def _on_window_close(self) -> None:
+        """Handle window close via the title-bar X button."""
+        if self._single_click_path and not self.user_made_selection:
+            if messagebox.askyesno(
+                _("Confirm template selection"),
+                _("Apply the highlighted template?\n\n{path}").format(path=self._single_click_path),
+            ):
+                self.user_made_selection = True
+            elif self._original_template_relative_path:
+                # Restore the original template since the user declined the highlighted selection
+                self.store_template_dir(self._original_template_relative_path)
+        self.close_window()
+
+    def close_window(self) -> None:
+        """Close the window - separated for testability."""
+        self.root.destroy()
+
+    def _sort_by_column(self, col: str, reverse: bool) -> None:
+        """Sort treeview items by the specified column."""
+        if hasattr(self, "sort_column") and self.sort_column and self.sort_column != col:
+            self.tree.heading(self.sort_column, text=self.sort_column)
+        self.tree.heading(col, text=col + (" ▼" if reverse else " ▲"))
+        self.sort_column = col
+
+        try:
+            col_data = [(float(self.tree.set(k, col)), k) for k in self.tree.get_children("")]
+        except ValueError:
+            col_data = [(self.tree.set(k, col), k) for k in self.tree.get_children("")]
+        col_data.sort(reverse=reverse)
+
+        # rearrange items in sorted positions
+        for index, (_val, k) in enumerate(col_data):
+            self.tree.move(k, "", index)
+
+        for index, item_id in enumerate(self.tree.get_children("")):
+            self.tree.item(item_id, tags=("striped",) if index % 2 else ())
+
+        # reverse sort next time
+        self.tree.heading(col, command=lambda: self._sort_by_column(col, not reverse))
+
+    def _display_vehicle_image(self, template_path: str) -> None:
+        """Display the vehicle image corresponding to the selected template."""
+        try:
+            vehicle_image_filepath = self.get_vehicle_image_filepath(template_path)
+            image_widget = self.put_image_in_label(self.top_frame, vehicle_image_filepath, IMAGE_HEIGHT_PX)
+            # Reuse the packed label so selecting a template never changes the
+            # header's requested geometry. Keep a reference to PhotoImage too.
+            self.image_label.configure(image=image_widget.cget("image"), text=image_widget.cget("text"), padding=0)
+            self.image_label.image = getattr(image_widget, "image", None)  # type: ignore[attr-defined]
+            image_widget.destroy()
+        except FileNotFoundError:
+            self.image_label.configure(
+                image="",
+                text=_("No 'vehicle.jpg' image file in the vehicle template directory."),
+                # Keep the wrapped fallback text within the fixed-height header.
+                wraplength=int(300 * self.dpi_scaling_factor),
+                padding=self.calculate_scaled_padding_tuple(4, 4),
+            )
+            self.image_label.image = None  # type: ignore[attr-defined]
+
+    def get_vehicle_image_filepath(self, template_path: str) -> str:
+        """
+        Get the filepath for a vehicle image.
+
+        Separated from display method for testability.
+
+        Args:
+            template_path: Path to the template
+
+        Returns:
+            Path to the vehicle image
+
+        Raises:
+            FileNotFoundError: If the image file doesn't exist
+
+        """
+        return self.vehicle_components_provider.get_vehicle_image_filepath(template_path)
+
+
+def argument_parser() -> argparse.Namespace:  # pragma: no cover
+    """
+    Parses command-line arguments for the script.
+
+    This function sets up an argument parser to handle the command-line arguments for the script.
+
+    Returns:
+    argparse.Namespace: An object containing the parsed arguments.
+
+    """
+    parser = argparse.ArgumentParser(
+        description=_(
+            "ArduPilot Template Overview - A component of the ArduPilot Methodic Configurator suite. "
+            "This tool presents available vehicle templates in a user-friendly interface, allowing you "
+            "to browse, compare, and select the most appropriate template for your vehicle configuration. "
+            "Select a template that most closely resembles your vehicle's component setup to streamline "
+            "the configuration process. The selected template will serve as a starting point for more "
+            "detailed parameter configuration."
+        )
+    )
+    return add_common_arguments(parser).parse_args()
+
+
+def setup_logging(loglevel: str) -> None:  # pragma: no cover
+    """
+    Set up logging with the specified log level.
+
+    Args:
+        loglevel: The log level as a string (e.g. 'DEBUG', 'INFO')
+
+    """
+    logging_basicConfig(level=loglevel, format="%(asctime)s - %(levelname)s - %(message)s")
+
+
+def main() -> None:  # pragma: no cover
+    """Main entry point for the application."""
+    args = argument_parser()
+    setup_logging(args.loglevel)
+
+    window = TemplateOverviewWindow()
+    window.run_app()
+
+    recent_dirs = ProgramSettings.get_recently_used_dirs()
+    if window and recent_dirs[0]:
+        logging_info(recent_dirs[0])
+
+
+if __name__ == "__main__":  # pragma: no cover
+    main()
