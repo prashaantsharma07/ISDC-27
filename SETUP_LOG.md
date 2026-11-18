@@ -48,3 +48,34 @@ chmod +x QGroundControl-x86_64.AppImage
 
 - Ran the AppImage for 12 seconds. It started normally (output saved in `first-launch.log`).
 - The only warning was `Error loading ... localization for "en_IN"`. This is harmless: QGC falls back to English.
+
+## Step 5: Get the source for the custom build
+
+The UI is compiled into the binary as Qt resources, so a visual rework needs a build from source. We used the exact same tag (v5.1.5) as the AppImage.
+
+```bash
+cd ~/QGroundControl
+git clone --depth 1 --branch v5.1.5 --recurse-submodules --shallow-submodules \
+  https://github.com/mavlink/qgroundcontrol.git src
+```
+
+## Step 6: Toolchain
+
+- **Qt 6.11.1** (the version pinned in `src/.github/build-config.json`) was installed per-user with aqtinstall into `~/QGroundControl/Qt` (1.9 GB):
+  ```bash
+  python3 -m venv ~/QGroundControl/.venv
+  ~/QGroundControl/.venv/bin/pip install aqtinstall ninja
+  ~/QGroundControl/.venv/bin/aqt install-qt linux desktop 6.11.1 linux_gcc_64 -O ~/QGroundControl/Qt \
+    -m qtgraphs qtlocation qtpositioning qtspeech qtmultimedia qtserialport qtimageformats \
+       qtshadertools qtconnectivity qtquick3d qtsensors qtscxml qtwebsockets qthttpserver
+  ```
+- **System build libraries** (needs sudo: X11/xcb headers, GStreamer dev and plugins for video, ninja, mold, ccache, patchelf):
+  ```bash
+  sudo apt-get install -y libatspi2.0-dev libgtk-3-dev libxcb-cursor-dev libxcb-glx0-dev \
+    libxcb-icccm4-dev libxcb-image0-dev libxcb-keysyms1-dev libxcb-present-dev \
+    libxcb-render-util0-dev libxcb-shape0-dev libxcb-sync-dev libxcb-util-dev \
+    libxcb-xfixes0-dev libxcb-xinerama0-dev libxcb-xkb-dev libxkbcommon-x11-dev \
+    libgstreamer1.0-dev libgstreamer-plugins-bad1.0-dev libgstreamer-plugins-base1.0-dev \
+    libgstreamer-plugins-good1.0-dev gstreamer1.0-plugins-ugly gstreamer1.0-libav \
+    gstreamer1.0-rtsp gstreamer1.0-qt6 libpipewire-0.3-dev ninja-build mold ccache patchelf
+  ```
