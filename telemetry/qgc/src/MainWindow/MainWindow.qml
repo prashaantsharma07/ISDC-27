@@ -87,6 +87,9 @@ ApplicationWindow {
 
         // Property to manage RemoteID quick access to settings page
         property bool               commingFromRIDIndicator:        false
+
+        // TeamMARS: optional camera panels (set by the Fly View widget layer)
+        property var                teamMarsCameraPanels:           null
     }
 
     /// Default color palette used throughout the UI

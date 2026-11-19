@@ -39,6 +39,8 @@ qt_add_qml_module(FlyViewModule
         FlyViewTopRightPanel.qml
         FlyViewVideo.qml
         FlyViewWidgetLayer.qml
+        TeamMARSCameraPanels.qml
+        TeamMARSCamerasAction.qml
         GuidedActionConfirm.qml
         GuidedActionLand.qml
         GuidedActionPause.qml
