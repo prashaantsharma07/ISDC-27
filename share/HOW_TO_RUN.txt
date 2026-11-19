@@ -1,7 +1,7 @@
-TeamMARS apps — Linux (x86_64)
-==============================
+TeamMARS apps v2.0 — Linux (x86_64)
+===================================
 
-  TeamMARS-Telemetry_5.1.5_x86_64.AppImage   ground control + telemetry (based on QGroundControl 5.1.5)
+  TeamMARS-Telemetry_2.0_x86_64.AppImage     ground control + telemetry + camera panels (based on QGroundControl 5.1.5)
   TeamMARS-PID-tuner_5.1.1_x86_64.AppImage   ArduPilot setup + PID tuning (based on ArduPilot Methodic Configurator)
 
 Needs: Ubuntu 24.04 or newer (or another recent 64-bit Linux).
@@ -11,15 +11,23 @@ Needs: Ubuntu 24.04 or newer (or another recent 64-bit Linux).
    (or in a terminal:  chmod +x TeamMARS-*.AppImage )
 3. Double-click to start.
 
+TeamMARS-Telemetry layout: status bar at the bottom, Takeoff/Land/RTL/Pause just above it,
+attitude + compass on the left, telemetry numbers on top.
+
+Cameras: press "Cameras" in the bottom strip. Hover a panel -> URL -> paste the camera stream
+(e.g. rtsp://192.168.144.25:8554/main.264) -> Enter. Hover again for Flip / Mirror / Swap / Size.
+AI detection (optional): see the vision/ folder on GitHub — setup.sh once, then run_vision.sh;
+camera panel 2 shows the YOLO boxes.
+
 If it says "Cannot mount AppImage / FUSE":   sudo apt install libfuse2t64
 Drone USB port "busy"? Only one program can use the flight controller at a time —
 close the other TeamMARS app / QGroundControl / Mission Planner first.
 TeamMARS-Telemetry can't see the drone on USB? Add yourself to the dialout group once:
    sudo usermod -aG dialout $USER     (then log out and back in)
 
-Safety: neither app changes anything on the drone until you press Upload / Write.
+Safety: neither app changes anything on the drone until you press Upload / Write / slide to confirm.
 
 Check the files are not corrupted (optional):
   sha256sum -c *.sha256
 
-Both apps are open source (GPL-3.0); source code is available from TeamMARS on request.
+Both apps are open source (GPL-3.0): https://github.com/prashaantsharma07/ISDC-27
