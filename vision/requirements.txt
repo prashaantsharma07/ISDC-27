@@ -1,0 +1,6 @@
+# CPU build of PyTorch (no GPU needed). Install with setup.sh, which adds the PyTorch CPU index.
+torch
+torchvision
+ultralytics
+opencv-python
+numpy

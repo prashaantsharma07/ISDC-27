@@ -367,3 +367,13 @@ ArduCopter (`devtools/fake_vehicle.py`): mode list, battery pop-up, takeoff conf
 - Settings: `[TeamMARSCameras]` in `~/.config/TeamMARS/TeamMARS-Telemetry.ini`.
 
 ---
+
+## Step 24 — TeamMARS Vision: YOLO / OpenCV on the camera (2026-11-19)
+
+- `~/TeamMARS-vision/` — `setup.sh` (CPU PyTorch + Ultralytics + OpenCV venv, ~1.6 GB), `run_vision.sh`
+  (uses Camera 1's URL automatically), launcher "TeamMARS Vision (YOLO)".
+- Modes: `yolo` (80 object classes), `motion`, `edges`, `none`. Output MJPEG on `http://127.0.0.1:8090/stream.mjpg`
+  = camera panel 2's default.
+- Measured on this laptop (i7-10750H, CPU only): **YOLO11n 27 ms/frame, ~18.6 fps**, test frame: 1 bus + 3 people.
+- Separate process on purpose: AI can never freeze telemetry or the map.
+- Tested end to end with an ffmpeg fake camera (H.264 over UDP) → panel 1 raw, panel 2 YOLO.
