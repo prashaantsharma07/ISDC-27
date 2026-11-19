@@ -386,3 +386,18 @@ ArduCopter (`devtools/fake_vehicle.py`): mode list, battery pop-up, takeoff conf
 - New per-panel **Fill / Fit** button: Fill (default) makes the picture fill the tall panel by trimming the sides; Fit shows the whole frame.
 - Map compensation: the camera column counts as a full-height right inset, and the telemetry bar, Takeoff strip and
   vehicle warnings are centred in the map area **left of the cameras**.
+
+---
+
+## Step 26 — USB capture cameras (FPV receivers / HDMI grabbers) (v2.2, 2026-11-19)
+
+Found on this PC: drone link = CP2102 USB radio on `/dev/ttyUSB0`; cameras = two MacroSilicon MS2109 USB capture
+adapters (`534d:2109`) = `/dev/video2` and `/dev/video4` (MJPEG up to 1080p60). Both showed colour bars = the
+adapter's own "no input signal" picture.
+
+- Camera panels now accept USB devices: **USB** button cycles capture devices (laptop webcam last), or type `usb:/dev/video2`.
+- Picks MJPEG at the highest frame rate **capped at 1280×720**: two grabbers at 1280×1024@60 exceed one USB 2.0 bus
+  (`No space left on device`); at 720p60 both run together (tested with ffmpeg and in the app).
+- Panels start one after the other and count as live only when frames arrive; otherwise they restart that camera.
+- If both panels point at the same device, panel 2 says so instead of failing silently.
+- Result: both panels live at 1280×720 @ 60 fps alongside the real drone link.

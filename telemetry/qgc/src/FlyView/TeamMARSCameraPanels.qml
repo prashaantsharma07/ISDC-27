@@ -34,6 +34,50 @@ Item {
 
     function toggle() { settings.enabled = !settings.enabled }
 
+    MediaDevices { id: mediaDevices }
+
+    /// Camera device whose id (on Linux: /dev/videoN) matches path, or null
+    function findVideoInput(path) {
+        var inputs = mediaDevices.videoInputs
+        for (var i = 0; i < inputs.length; i++) {
+            if (inputs[i].id === path || String(inputs[i].id).indexOf(path) >= 0) {
+                return inputs[i]
+            }
+        }
+        return null
+    }
+
+    /// Cycle a panel through the USB capture devices (skips the laptop's built-in webcam last)
+    function nextUsbUrl(current) {
+        var inputs = mediaDevices.videoInputs
+        var ids = []
+        for (var i = 0; i < inputs.length; i++) {
+            if (String(inputs[i].description).indexOf("Integrated") < 0) ids.push(String(inputs[i].id))
+        }
+        for (i = 0; i < inputs.length; i++) {
+            if (String(inputs[i].description).indexOf("Integrated") >= 0) ids.push(String(inputs[i].id))
+        }
+        if (ids.length === 0) return current
+        var cur = current.indexOf("usb:") === 0 ? current.substring(4) : ""
+        var next = (ids.indexOf(cur) + 1) % ids.length
+        return "usb:" + ids[next]
+    }
+
+    /// Prefer MJPEG (fast over USB) at the highest frame rate, up to 1280x720 (fits two cameras on one USB 2.0 bus)
+    function pickFormat(cam) {
+        var formats = cam.cameraDevice.videoFormats
+        var best = null, bestScore = -1
+        for (var i = 0; i < formats.length; i++) {
+            var f = formats[i]
+            // cap at 1280x720: two USB 2.0 grabbers at 1280x1024@60 exceed the bus ("No space left on device")
+            if (f.resolution.width > 1280 || f.resolution.height > 720) continue
+            // 29 = QVideoFrameFormat::Format_Jpeg (MJPEG); the enum is not exposed to QML
+            var score = f.maxFrameRate * 100000 + f.resolution.width * f.resolution.height / 100 + (f.pixelFormat === 29 ? 50000000 : 0)
+            if (score > bestScore) { bestScore = score; best = f }
+        }
+        if (best) cam.cameraFormat = best
+    }
+
     Settings {
         id:         settings
         category:   "TeamMARSCameras"
@@ -101,7 +145,18 @@ Item {
         readonly property bool   flip:   slot === 1 ? settings.flip1 : settings.flip2
         readonly property bool   mirror: slot === 1 ? settings.mirror1 : settings.mirror2
         readonly property bool   fill:   slot === 1 ? settings.fill1 : settings.fill2
-        readonly property bool   playing: player.playbackState === MediaPlayer.PlayingState && player.hasVideo
+        // USB capture devices (FPV receiver / HDMI grabbers): "usb:/dev/video2"
+        readonly property bool   isUsb:   url.indexOf("usb:") === 0 || url.indexOf("/dev/video") === 0
+        readonly property string usbPath: url.indexOf("usb:") === 0 ? url.substring(4) : url
+        readonly property var    usbDevice: isUsb ? root.findVideoInput(usbPath) : null
+        // a USB device can only be opened once: if both panels pick the same one, panel 2 stands down
+        readonly property bool   usbConflict: isUsb && slot === 2 && settings.url1 === url
+        // start the panels one after the other: two USB cameras starting at the same instant can fail
+        property bool _startReady: false
+        Timer { interval: 300 + panel.slot * 1200; running: true; onTriggered: panel._startReady = true }
+        // USB counts as live only once frames actually arrive (VideoOutput learns the frame size)
+        readonly property bool   playing: isUsb ? (usbCamera.active && usbDevice !== null && videoOut.sourceRect.width > 0)
+                                                : (player.playbackState === MediaPlayer.PlayingState && player.hasVideo)
 
         function setFlip(v)   { if (slot === 1) settings.flip1 = v;   else settings.flip2 = v }
         function setMirror(v) { if (slot === 1) settings.mirror1 = v; else settings.mirror2 = v }
@@ -137,28 +192,45 @@ Item {
 
         MediaPlayer {
             id:             player
-            source:         panel.url
-            videoOutput:    videoOut
+            source:         panel.isUsb ? "" : panel.url
+            videoOutput:    panel.isUsb ? null : videoOut
             loops:          MediaPlayer.Infinite
 
             Component.onCompleted: {
                 try { player.playbackOptions.playbackIntent = PlaybackOptions.LowLatencyStreaming } catch (e) { }
-                if (panel.url !== "" && root.active) player.play()
+                if (panel.url !== "" && !panel.isUsb && root.active) player.play()
             }
-            onSourceChanged: if (panel.url !== "" && root.active) player.play()
+            onSourceChanged: if (panel.url !== "" && !panel.isUsb && root.active) player.play()
+        }
+
+        // USB capture: Qt camera on the chosen /dev/videoN, fastest MJPEG mode up to 1280x720
+        CaptureSession {
+            camera: Camera {
+                id:             usbCamera
+                cameraDevice:   panel.usbDevice ? panel.usbDevice : mediaDevices.defaultVideoInput
+                active:         root.active && panel.isUsb && panel.usbDevice !== null && !panel.usbConflict && panel._startReady
+                // compressed MJPEG mode before streaming: two uncompressed 1080p USB feeds do not fit on one USB 2.0 bus
+                onCameraDeviceChanged:  root.pickFormat(usbCamera)
+                Component.onCompleted:  root.pickFormat(usbCamera)
+                onActiveChanged:        if (active) root.pickFormat(usbCamera)
+            }
+            videoOutput: panel.isUsb ? videoOut : null
         }
 
         Connections {
             target: root
-            function onActiveChanged() { if (root.active && panel.url !== "") player.play(); else player.stop() }
+            function onActiveChanged() { if (root.active && panel.url !== "" && !panel.isUsb) player.play(); else player.stop() }
         }
 
         // Reconnect automatically if the stream drops or the camera boots after us
         Timer {
             interval:   3000
             repeat:     true
-            running:    root.active && panel.url !== "" && !panel.playing
-            onTriggered: { player.stop(); player.play() }
+            running:    root.active && panel.url !== "" && !panel.playing && !panel.usbConflict
+            onTriggered: {
+                if (panel.isUsb) { usbCamera.active = false; usbCamera.active = Qt.binding(function() { return root.active && panel.isUsb && panel.usbDevice !== null && !panel.usbConflict && panel._startReady }) }
+                else { player.stop(); player.play() }
+            }
         }
 
         // Status text when there is no picture
@@ -170,8 +242,10 @@ Item {
             color:                  "white"
             font.pointSize:         ScreenTools.smallFontPointSize
             visible:                !panel.playing
-            text:                   panel.url === "" ? qsTr("Camera %1\nNo stream set — hover and press URL").arg(panel.slot)
-                                                     : qsTr("Camera %1\nConnecting…\n%2").arg(panel.slot).arg(panel.url)
+            text:                   panel.url === "" ? qsTr("Camera %1\nNo stream set — hover and press USB or URL").arg(panel.slot)
+                                    : (panel.isUsb && panel.usbDevice === null) ? qsTr("Camera %1\nUSB device %2 not found — press USB").arg(panel.slot).arg(panel.usbPath)
+                                    : panel.usbConflict ? qsTr("Camera %1\n%2 is already used by Camera 1 — press USB for the other one").arg(panel.slot).arg(panel.usbPath)
+                                    : qsTr("Camera %1\nConnecting…\n%2").arg(panel.slot).arg(panel.url)
         }
 
         // Title chip
@@ -210,6 +284,7 @@ Item {
             PanelButton { label: qsTr("Mirror"); on: panel.mirror; onClicked: panel.setMirror(!panel.mirror) }
             PanelButton { label: qsTr("Swap");                     onClicked: settings.swapped = !settings.swapped }
             PanelButton { label: qsTr("Size");                     onClicked: settings.sizeIndex = (settings.sizeIndex + 1) % root._sizes.length }
+            PanelButton { label: qsTr("USB");    on: panel.isUsb;  onClicked: panel.setUrl(root.nextUsbUrl(panel.url)) }
             PanelButton { label: qsTr("URL");    on: urlField.visible; onClicked: { urlField.text = panel.url; urlField.visible = !urlField.visible; if (urlField.visible) urlField.forceActiveFocus() } }
         }
 
@@ -220,7 +295,7 @@ Item {
             anchors.verticalCenter: parent.verticalCenter
             anchors.margins:    ScreenTools.defaultFontPixelWidth
             visible:            false
-            placeholderText:    "rtsp://192.168.144.25:8554/main.264"
+            placeholderText:    "rtsp://192.168.144.25:8554/main.264  or  usb:/dev/video2"
             onAccepted:         { panel.setUrl(text.trim()); visible = false }
             onEditingFinished:  visible = false
         }

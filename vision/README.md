@@ -23,6 +23,8 @@ telemetry, the map or the controls. If it stops, panel 2 just shows "Connectingâ
 Then in TeamMARS-Telemetry press **Cameras**; panel 2 already points at `http://127.0.0.1:8090/stream.mjpg`.
 
 Notes
+- **USB capture adapters** (FPV receiver / HDMI grabber): use the device number, e.g. `./run_vision.sh --source 2` for
+  `/dev/video2`. A USB device can only be opened by one program â€” let the helper have it and watch panel 2.
 - Best with **RTSP** cameras (several viewers can share one stream). A UDP stream can only be received by one
   program: give the helper the camera and use panel 2 for the picture.
 - The YOLO model `yolo11n.pt` (~5 MB) downloads automatically on first run.

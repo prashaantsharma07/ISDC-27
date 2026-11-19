@@ -12,6 +12,8 @@ if [[ " $* " != *" --source "* ]]; then
     echo "No --source given and Camera 1 has no URL in TeamMARS-Telemetry. Example: ./run_vision.sh --source rtsp://192.168.144.25:8554/main.264"
     exit 1
   fi
+  # camera panels store USB cameras as usb:/dev/videoN -> OpenCV wants the number N
+  case "$URL" in usb:/dev/video*) URL="${URL#usb:/dev/video}" ;; /dev/video*) URL="${URL#/dev/video}" ;; esac
   set -- --source "$URL" "$@"
 fi
 exec .venv/bin/python -I teammars_vision.py "$@"
