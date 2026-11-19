@@ -329,3 +329,28 @@ The launcher now points to a new file, `~/TeamMARS-brand/teammars-pid-tuner-icon
   upstream files, so every later diff shows exactly what we changed. Build scripts re-apply them to a fresh upstream clone.
 - Downloads: GitHub Release with both AppImages and their `.sha256` files.
 - Commits use the GitHub no-reply e-mail; drone parameter backups stay on this PC.
+
+---
+
+## Step 22 — Pilot-first Fly View layout (2026-11-19)
+
+Requested: compass/heading on the left edge in the middle, connection bar at the bottom of the map,
+takeoff/land just above it, and everything that appears after connecting re-placed so nothing feels off-centre.
+
+| Element | Stock QGC | TeamMARS-Telemetry |
+|---|---|---|
+| Status / connection bar | top | **bottom** of the map |
+| Takeoff / Land / RTL / Pause strip | vertical, top-left | **horizontal, centred just above the bar** |
+| Attitude + compass | bottom-right | **left edge, vertically centred** |
+| Telemetry values | bottom-right | **top, centred** |
+| Map scale | next to the tool strip | top-left corner |
+| Bar pop-ups (battery, GPS, flight modes, menu) | drop down | **open upwards** from the bar |
+| Tool-strip pop-ups (Actions…) | open to the right | **open upwards**, centred on the button |
+| Guided "slide to confirm" + hint | top bar | bottom bar, hint floats above the strip |
+
+Files: `FlyView.qml`, `FlyViewWidgetLayer.qml`, `FlyViewToolBar.qml`, `ToolStrip.qml` (new horizontal mode),
+`ToolStripDropPanel.qml` (opens upwards), `MainWindow.qml` (drawer direction), `FlightModeMenuIndicator.qml`.
+Plan View is unchanged (bar on top, vertical tool strip). Checked connected and disconnected with a simulated
+ArduCopter (`devtools/fake_vehicle.py`): mode list, battery pop-up, takeoff confirm, altitude slider.
+
+---

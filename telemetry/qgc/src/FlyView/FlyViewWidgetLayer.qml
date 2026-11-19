@@ -37,27 +37,68 @@ Item {
     property bool   _layoutSpacing:         ScreenTools.defaultFontPixelWidth
     property bool   _showSingleVehicleUI:   true
 
+    property real   toolStripHeight:        toolStrip.visible ? toolStrip.height : 0
+
+    // TeamMARS pilot layout:
+    //   left edge, centred  -> attitude / compass
+    //   top, centred        -> telemetry values
+    //   bottom, centred     -> takeoff / land / RTL / pause tool strip (just above the bottom status bar)
+    //   right edge          -> optional camera panels (top + bottom), vehicle panels move left of them
     QGCToolInsets {
         id:                     _totalToolInsets
-        leftEdgeTopInset:       toolStrip.leftEdgeTopInset
-        leftEdgeCenterInset:    toolStrip.leftEdgeCenterInset
+        leftEdgeTopInset:       mapScale.leftEdgeTopInset
+        leftEdgeCenterInset:    instrumentPanel.leftEdgeCenterInset
         leftEdgeBottomInset:    virtualJoystickMultiTouch.visible ? virtualJoystickMultiTouch.leftEdgeBottomInset : parentToolInsets.leftEdgeBottomInset
-        rightEdgeTopInset:      topRightPanel.rightEdgeTopInset
-        rightEdgeCenterInset:   topRightPanel.rightEdgeCenterInset
-        rightEdgeBottomInset:   bottomRightRowLayout.rightEdgeBottomInset
-        topEdgeLeftInset:       toolStrip.topEdgeLeftInset
-        topEdgeCenterInset:     mapScale.topEdgeCenterInset
-        topEdgeRightInset:      topRightPanel.topEdgeRightInset
+        rightEdgeTopInset:      Math.max(cameraPanels.rightEdgeInset, topRightPanel.rightEdgeTopInset)
+        rightEdgeCenterInset:   Math.max(cameraPanels.rightEdgeInset, topRightPanel.rightEdgeCenterInset)
+        rightEdgeBottomInset:   cameraPanels.rightEdgeInset
+        topEdgeLeftInset:       mapScale.topEdgeCenterInset
+        topEdgeCenterInset:     telemetryBar.topEdgeCenterInset
+        topEdgeRightInset:      Math.max(topRightPanel.topEdgeRightInset, cameraPanels.active ? cameraPanels.panelHeight + _layoutMargin : 0)
         bottomEdgeLeftInset:    virtualJoystickMultiTouch.visible ? virtualJoystickMultiTouch.bottomEdgeLeftInset : parentToolInsets.bottomEdgeLeftInset
-        bottomEdgeCenterInset:  bottomRightRowLayout.bottomEdgeCenterInset
-        bottomEdgeRightInset:   virtualJoystickMultiTouch.visible ? virtualJoystickMultiTouch.bottomEdgeRightInset : bottomRightRowLayout.bottomEdgeRightInset
+        bottomEdgeCenterInset:  toolStrip.bottomEdgeCenterInset
+        bottomEdgeRightInset:   virtualJoystickMultiTouch.visible ? virtualJoystickMultiTouch.bottomEdgeRightInset : (cameraPanels.active ? cameraPanels.panelHeight + _layoutMargin : 0)
+    }
+
+    // TeamMARS: optional camera feeds on the right edge (toggled with the "Cameras" tool-strip button)
+    TeamMARSCameraPanels {
+        id:                     cameraPanels
+        anchors.top:            parent.top
+        anchors.bottom:         parent.bottom
+        anchors.right:          parent.right
+        z:                      QGroundControl.zOrderWidgets
+        Component.onCompleted:  globals.teamMarsCameraPanels = cameraPanels
+    }
+
+    // TeamMARS: attitude + compass on the left edge, vertically centred
+    FlyViewInstrumentPanel {
+        id:                     instrumentPanel
+        anchors.left:           parent.left
+        anchors.verticalCenter: parent.verticalCenter
+        selectionUIRightAnchor: false
+        visible:                QGroundControl.corePlugin.options.flyView.showInstrumentPanel && _showSingleVehicleUI && !QGroundControl.videoManager.fullScreen
+
+        property real leftEdgeCenterInset: visible ? x + width + _layoutMargin : 0
+    }
+
+    // TeamMARS: telemetry values centred along the top
+    TelemetryValuesBar {
+        id:                         telemetryBar
+        anchors.top:                parent.top
+        anchors.horizontalCenter:   parent.horizontalCenter
+        settingsGroup:              factValueGrid.telemetryBarSettingsGroup
+        specificVehicleForCard:     null // Tracks active vehicle
+        visible:                    !QGroundControl.videoManager.fullScreen
+
+        property real topEdgeCenterInset: visible ? y + height + _layoutMargin : 0
     }
 
     FlyViewTopRightPanel {
         id:                     topRightPanel
         anchors.top:            parent.top
-        anchors.right:          parent.right
-        maximumHeight:          parent.height - (bottomRightRowLayout.height + _margins * 4)
+        anchors.right:          cameraPanels.active ? cameraPanels.left : parent.right
+        anchors.rightMargin:    cameraPanels.active ? _layoutMargin : 0
+        maximumHeight:          parent.height - (toolStripHeight + _margins * 4)
 
         property real topEdgeRightInset:    height + _layoutMargin
         property real rightEdgeTopInset:    width + _layoutMargin
@@ -67,7 +108,8 @@ Item {
     FlyViewTopRightColumnLayout {
         id:                 topRightColumnLayout
         anchors.top:        parent.top
-        anchors.right:      parent.right
+        anchors.right:      cameraPanels.active ? cameraPanels.left : parent.right
+        anchors.rightMargin: cameraPanels.active ? _layoutMargin : 0
         spacing:            _layoutSpacing
         visible:           !topRightPanel.visible
 
@@ -76,16 +118,6 @@ Item {
         property real rightEdgeCenterInset: rightEdgeTopInset
     }
 
-    FlyViewBottomRightRowLayout {
-        id:                 bottomRightRowLayout
-        anchors.bottom:     parent.bottom
-        anchors.right:      parent.right
-        spacing:            _layoutSpacing
-
-        property real bottomEdgeRightInset:     height + _layoutMargin
-        property real bottomEdgeCenterInset:    bottomEdgeRightInset
-        property real rightEdgeBottomInset:     width + _layoutMargin
-    }
 
     FlyViewMissionCompleteDialog {
         missionController:      _missionController
@@ -111,7 +143,7 @@ Item {
         anchors.bottom:             parent.bottom
         anchors.bottomMargin:       bottomLoaderMargin
         anchors.left:               parent.left
-        anchors.leftMargin:         ( y > toolStrip.y + toolStrip.height ? toolStrip.width / 2 : toolStrip.width * 1.05 + toolStrip.x)
+        anchors.leftMargin:         instrumentPanel.visible ? instrumentPanel.width + _layoutMargin : _layoutMargin
         source:                     "qrc:/qml/QGroundControl/FlyView/VirtualJoystick.qml"
         active:                     _virtualJoystickEnabled && !(_activeVehicle ? _activeVehicle.usingHighLatencyLink : false)
 
@@ -121,7 +153,7 @@ Item {
         property bool _virtualJoystickEnabled: QGroundControl.settingsManager.appSettings.virtualJoystick.rawValue
         property real bottomEdgeRightInset:    parent.height-y
         property var  _pipViewMargin:          _pipView.visible ? parentToolInsets.bottomEdgeLeftInset + ScreenTools.defaultFontPixelHeight * 2 :
-                                               bottomRightRowLayout.height + ScreenTools.defaultFontPixelHeight * 1.5
+                                               toolStripHeight + ScreenTools.defaultFontPixelHeight * 1.5
 
         property var  bottomLoaderMargin:      _pipViewMargin >= parent.height / 2 ? parent.height / 2 : _pipViewMargin
 
@@ -147,12 +179,14 @@ Item {
     }
 
     FlyViewToolStrip {
-        id:                     toolStrip
-        anchors.left:           parent.left
-        anchors.top:            parent.top
-        z:                      QGroundControl.zOrderWidgets
-        maxHeight:              parent.height - y - parentToolInsets.bottomEdgeLeftInset - _toolsMargin
-        visible:                !QGroundControl.videoManager.fullScreen
+        id:                         toolStrip
+        anchors.horizontalCenter:   parent.horizontalCenter
+        anchors.bottom:             parent.bottom
+        z:                          QGroundControl.zOrderWidgets
+        horizontal:                 true
+        maxHeight:                  parent.height
+        maxWidth:                   parent.width - (instrumentPanel.leftEdgeCenterInset + cameraPanels.rightEdgeInset) * 2
+        visible:                    !QGroundControl.videoManager.fullScreen
 
         onDisplayPreFlightChecklist: {
             if (!preFlightChecklistLoader.active) {
@@ -161,9 +195,7 @@ Item {
             preFlightChecklistLoader.item.open()
         }
 
-        property real topEdgeLeftInset:     visible ? y + height : 0
-        property real leftEdgeTopInset:     visible ? x + width : 0
-        property real leftEdgeCenterInset:  leftEdgeTopInset
+        property real bottomEdgeCenterInset: visible ? height + _layoutMargin : 0
     }
 
     VehicleWarnings {
@@ -173,20 +205,19 @@ Item {
 
     MapScale {
         id:                 mapScale
-        anchors.left:       toolStrip.right
-        anchors.leftMargin: _toolsMargin
+        anchors.left:       parent.left
         anchors.top:        parent.top
         mapControl:         _mapControl
         autoHide:           true
         visible:            !ScreenTools.isTinyScreen && QGroundControl.corePlugin.options.flyView.showMapScale && QGCViewer3DManager.displayMode !== QGCViewer3DManager.View3D && mapControl.pipState.state === mapControl.pipState.fullState
 
         property real topEdgeCenterInset: visible ? y + height : 0
+        property real leftEdgeTopInset:   visible ? x + width : 0
     }
 
     Viewer3DScaleBar {
         objectName:         "viewer3DScaleBar"
-        anchors.left:       toolStrip.right
-        anchors.leftMargin: _toolsMargin
+        anchors.left:       parent.left
         anchors.top:        parent.top
         controller:         _root.viewer3DCameraController
         autoHide:           true

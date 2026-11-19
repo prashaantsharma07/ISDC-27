@@ -30,6 +30,7 @@ Item {
     property real   _viewportMaxHeight: _viewportMaxBottom - _viewportMaxTop
     property var    _dropPanelCancel
     property var    _parentButton
+    readonly property bool _dropUp: toolStrip && toolStrip.horizontal === true   // TeamMARS: strip along the bottom -> open upwards
 
     function show(panelEdgeTopPoint, panelComponent, parentButton) {
         _parentButton = parentButton
@@ -50,6 +51,10 @@ Item {
     }
 
     function _calcPositions() {
+        if (_dropUp) {
+            _calcPositionsUp()
+            return
+        }
         var panelComponentWidth  = panelLoader.item.width
         var panelComponentHeight = panelLoader.item.height
 
@@ -75,6 +80,32 @@ Item {
         arrowCanvas.arrowBase2.y = arrowCanvas.arrowBase1.y + _arrowBaseHeight
         arrowCanvas.requestPaint()
     } // function - _calcPositions
+
+    // TeamMARS: panel above a horizontal tool strip, centred on its button, arrow pointing down
+    function _calcPositionsUp() {
+        if (!panelLoader.item || !_parentButton) {
+            return
+        }
+        var panelComponentWidth  = panelLoader.item.width
+        var panelComponentHeight = panelLoader.item.height
+        var buttonCenterX        = _parentButton.mapToItem(toolStrip, _parentButton.width / 2, 0).x
+        var minX                 = -toolStrip.x + _dropMargin
+        var maxRight             = toolStrip.parent.width - toolStrip.x - _dropMargin
+        var maxHeight            = toolStrip.y - _dropMargin
+
+        dropDownItem.width  = panelComponentWidth + (_dropMargin * 2)
+        dropDownItem.height = Math.min(panelComponentHeight + (_dropMargin * 2) + _arrowPointWidth, maxHeight)
+        dropDownItem.x      = Math.max(minX, Math.min(buttonCenterX - dropDownItem.width / 2, maxRight - dropDownItem.width))
+        dropDownItem.y      = -dropDownItem.height - _dropMargin / 2
+
+        arrowCanvas.arrowPoint.x = buttonCenterX - dropDownItem.x
+        arrowCanvas.arrowPoint.y = dropDownItem.height
+        arrowCanvas.arrowBase1.x = arrowCanvas.arrowPoint.x - (_arrowBaseHeight / 2)
+        arrowCanvas.arrowBase1.y = dropDownItem.height - _arrowPointWidth
+        arrowCanvas.arrowBase2.x = arrowCanvas.arrowPoint.x + (_arrowBaseHeight / 2)
+        arrowCanvas.arrowBase2.y = arrowCanvas.arrowBase1.y
+        arrowCanvas.requestPaint()
+    }
 
     QGCPalette { id: qgcPal }
 
@@ -106,6 +137,23 @@ Item {
             property point arrowBase2: Qt.point(0, 0)
 
             onPaint: {
+                if (_dropUp) {
+                    var ctx = getContext("2d")
+                    var bodyHeight = parent.height - _arrowPointWidth
+                    ctx.reset()
+                    ctx.beginPath()
+                    ctx.moveTo(0, 0)
+                    ctx.lineTo(parent.width, 0)
+                    ctx.lineTo(parent.width, bodyHeight)
+                    ctx.lineTo(arrowBase2.x, arrowBase2.y)
+                    ctx.lineTo(arrowPoint.x, arrowPoint.y)
+                    ctx.lineTo(arrowBase1.x, arrowBase1.y)
+                    ctx.lineTo(0, bodyHeight)
+                    ctx.closePath()
+                    ctx.fillStyle = qgcPal.windowShade
+                    ctx.fill()
+                    return
+                }
                 var panelX = _arrowPointWidth
                 var panelY = 0
                 var panelWidth = parent.width - _arrowPointWidth
@@ -132,9 +180,10 @@ Item {
 
         QGCFlickable {
             id:                 panelItemFlickable
-            anchors.margins:    _dropMargin
-            anchors.leftMargin: _dropMargin + _arrowPointWidth
-            anchors.fill:       parent
+            anchors.margins:        _dropMargin
+            anchors.leftMargin:     _dropUp ? _dropMargin : _dropMargin + _arrowPointWidth
+            anchors.bottomMargin:   _dropUp ? _dropMargin + _arrowPointWidth : _dropMargin
+            anchors.fill:           parent
             flickableDirection: Flickable.VerticalFlick
             contentWidth:       panelLoader.width
             contentHeight:      panelLoader.height

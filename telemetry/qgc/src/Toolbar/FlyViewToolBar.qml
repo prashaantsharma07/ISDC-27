@@ -19,6 +19,7 @@ Item {
     property color  _mainStatusBGColor: qgcPal.brandingPurple
     property real   _leftRightMargin:   ScreenTools.defaultFontPixelWidth * 0.75
     property var    _guidedController:  globals.guidedControllerFlyView
+    property real   messageBottomOffset: 0   ///< TeamMARS: guided-action hints float above the tool strip
 
     function dropMainStatusIndicatorTool() {
         mainStatusIndicator.dropMainStatusIndicator();
@@ -153,8 +154,8 @@ Item {
     // part of the Flickable
     Rectangle {
         id:                         guidedActionMessageDisplay
-        anchors.top:                control.bottom
-        anchors.topMargin:          _margins
+        anchors.bottom:             control.top
+        anchors.bottomMargin:       _margins + control.messageBottomOffset
         x:                          control.mapFromItem(guidedActionConfirm.parent, guidedActionConfirm.x, 0).x + (guidedActionConfirm.width - guidedActionMessageDisplay.width) / 2
         width:                      messageLabel.contentWidth + (_margins * 2)
         height:                     messageLabel.contentHeight + (_margins * 2)

@@ -59,13 +59,13 @@ Item {
         toolbar.dropMainStatusIndicatorTool();
     }
 
+    // TeamMARS layout: the connection/status bar sits along the BOTTOM of the map
     QGCToolInsets {
         id:                     _toolInsets
-        topEdgeLeftInset:       toolbar.height
-        topEdgeCenterInset:     topEdgeLeftInset
-        topEdgeRightInset:      topEdgeLeftInset
         leftEdgeBottomInset:    _pipView.leftEdgeBottomInset
-        bottomEdgeLeftInset:    _pipView.bottomEdgeLeftInset
+        bottomEdgeLeftInset:    Math.max(toolbar.height, _pipView.bottomEdgeLeftInset)
+        bottomEdgeCenterInset:  toolbar.height
+        bottomEdgeRightInset:   toolbar.height
     }
 
     Item {
@@ -94,6 +94,7 @@ Item {
             anchors.left:           parent.left
             anchors.bottom:         parent.bottom
             anchors.margins:        _toolsMargin
+            anchors.bottomMargin:   toolbar.height + _toolsMargin
             item1IsFullSettingsKey: "MainFlyWindowIsMap"
             item1:                  mapControl
             item2:                  QGroundControl.videoManager.hasVideo ? videoControl : null
@@ -102,7 +103,7 @@ Item {
             z:                      QGroundControl.zOrderWidgets
 
             property real leftEdgeBottomInset: visible ? width + anchors.margins : 0
-            property real bottomEdgeLeftInset: visible ? height + anchors.margins : 0
+            property real bottomEdgeLeftInset: visible ? height + anchors.bottomMargin : 0
         }
 
         FlyViewWidgetLayer {
@@ -112,7 +113,7 @@ Item {
             anchors.left:           parent.left
             anchors.right:          guidedValueSlider.visible ? guidedValueSlider.left : parent.right
             anchors.margins:        _widgetMargin
-            anchors.topMargin:      toolbar.height + _widgetMargin
+            anchors.bottomMargin:   toolbar.height + _widgetMargin
             z:                      _fullItemZorder + 2
             parentToolInsets:       _toolInsets
             mapControl:             _mapControl
@@ -151,11 +152,11 @@ Item {
         GuidedValueSlider {
             id:                 guidedValueSlider
             anchors.right:      parent.right
-            anchors.top:        parent.top
-            anchors.bottom:     parent.bottom
-            anchors.topMargin:  toolbar.height
-            z:                  QGroundControl.zOrderTopMost
-            visible:            false
+            anchors.top:            parent.top
+            anchors.bottom:         parent.bottom
+            anchors.bottomMargin:   toolbar.height
+            z:                      QGroundControl.zOrderTopMost
+            visible:                false
         }
 
         Loader {
@@ -181,7 +182,9 @@ Item {
 
     FlyViewToolBar {
         id:                 toolbar
+        anchors.bottom:     parent.bottom
         guidedValueSlider:  _guidedValueSlider
+        messageBottomOffset: widgetLayer.toolStripHeight + _widgetMargin
         visible:            !QGroundControl.videoManager.fullScreen
     }
 }

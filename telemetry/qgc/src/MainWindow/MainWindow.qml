@@ -603,7 +603,7 @@ ApplicationWindow {
     Popup {
         id:             indicatorDrawer
         x:              calcXPosition()
-        y:              ScreenTools.toolbarHeight + _margins
+        y:              calcYPosition()
         leftInset:      0
         rightInset:     0
         topInset:       0
@@ -619,6 +619,19 @@ ApplicationWindow {
 
         property bool _expanded:    false
         property real _margins:     ScreenTools.defaultFontPixelHeight / 4
+
+        // TeamMARS: Fly View's bar is at the bottom, so its drawers open upwards; Plan View's bar stays on top
+        function _indicatorInLowerHalf() {
+            // No indicator (e.g. the logo/tool menu): follow the Fly View bar, which is at the bottom
+            return indicatorItem ? indicatorItem.mapToItem(mainWindow.contentItem, 0, 0).y > mainWindow.contentItem.height / 2 : flyView.visible
+        }
+
+        function calcYPosition() {
+            if (_indicatorInLowerHalf()) {
+                return Math.max(_margins, mainWindow.contentItem.height - ScreenTools.toolbarHeight - _margins - height)
+            }
+            return ScreenTools.toolbarHeight + _margins
+        }
 
         function calcXPosition() {
             if (indicatorItem) {

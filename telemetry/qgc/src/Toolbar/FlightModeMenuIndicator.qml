@@ -56,9 +56,11 @@ RowLayout {
 
     Drawer {
         id:             indicatorDrawer
-        y:              ScreenTools.toolbarHeight
+        y:              _barAtBottom ? 0 : ScreenTools.toolbarHeight     // TeamMARS: Fly View bar is at the bottom
         width:          mainLayout.width + (ScreenTools.defaultFontPixelWidth * 2)
-        height:         mainWindow.height - y
+        height:         mainWindow.height - ScreenTools.toolbarHeight
+
+        property bool _barAtBottom: _root.mapToItem(null, 0, 0).y > mainWindow.height / 2
         visible:        false
         modal:          true
         focus:          true
