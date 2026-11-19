@@ -12,7 +12,8 @@ import QGroundControl.Controls
 /// * Off by default; toggled from the "Cameras" button in the tool strip. Everything is remembered.
 /// * Each panel plays any stream FFmpeg understands: rtsp://, udp://, http(s):// MJPEG/HLS, files.
 ///   Panel 2 defaults to the TeamMARS vision helper (YOLO / OpenCV overlay) on this PC.
-/// * Per panel: flip (upside-down), mirror (left/right), change URL. Panels can be swapped and resized.
+/// * Each panel is half the map height (top half / bottom half); "Size" changes the width.
+/// * Per panel: fill/fit, flip (upside-down), mirror (left/right), change URL. Panels can be swapped and resized.
 /// * Uses Qt Multimedia (separate from QGC's own video pipeline), low-latency mode, no audio,
 ///   and it retries automatically if a stream drops — it can never block telemetry or the map.
 Item {
@@ -21,7 +22,8 @@ Item {
     property real   margin:         ScreenTools.defaultFontPixelWidth * 0.75
     property real   panelWidth:     Math.max(ScreenTools.defaultFontPixelWidth * 26,
                                              Math.min(parent ? parent.width * _sizes[settings.sizeIndex] : 0, ScreenTools.defaultFontPixelWidth * 64))
-    property real   panelHeight:    panelWidth * 9 / 16
+    // TeamMARS: the two panels share the full height of the map — each gets one half
+    property real   panelHeight:    Math.max(0, (height - margin) / 2)
     property bool   active:         settings.enabled
     readonly property real rightEdgeInset: active ? panelWidth + margin : 0
 
@@ -43,6 +45,8 @@ Item {
         property bool   mirror1:    false
         property bool   flip2:      false
         property bool   mirror2:    false
+        property bool   fill1:      true    // true: fill the tall panel (trims the sides), false: show the whole frame
+        property bool   fill2:      true
         property bool   swapped:    false
         property int    sizeIndex:  1
     }
@@ -96,10 +100,12 @@ Item {
         readonly property string url:    slot === 1 ? settings.url1 : settings.url2
         readonly property bool   flip:   slot === 1 ? settings.flip1 : settings.flip2
         readonly property bool   mirror: slot === 1 ? settings.mirror1 : settings.mirror2
+        readonly property bool   fill:   slot === 1 ? settings.fill1 : settings.fill2
         readonly property bool   playing: player.playbackState === MediaPlayer.PlayingState && player.hasVideo
 
         function setFlip(v)   { if (slot === 1) settings.flip1 = v;   else settings.flip2 = v }
         function setMirror(v) { if (slot === 1) settings.mirror1 = v; else settings.mirror2 = v }
+        function setFill(v)   { if (slot === 1) settings.fill1 = v;   else settings.fill2 = v }
         function setUrl(v)    { if (slot === 1) settings.url1 = v;    else settings.url2 = v }
 
         // Glass frame
@@ -119,7 +125,7 @@ Item {
             VideoOutput {
                 id:             videoOut
                 anchors.fill:   parent
-                fillMode:       VideoOutput.PreserveAspectFit
+                fillMode:       panel.fill ? VideoOutput.PreserveAspectCrop : VideoOutput.PreserveAspectFit
                 transform: Scale {
                     origin.x:   videoOut.width / 2
                     origin.y:   videoOut.height / 2
@@ -199,6 +205,7 @@ Item {
             visible:            hover.hovered || urlField.visible
             layoutDirection:    Qt.RightToLeft
 
+            PanelButton { label: panel.fill ? qsTr("Fill") : qsTr("Fit"); on: panel.fill; onClicked: panel.setFill(!panel.fill) }
             PanelButton { label: qsTr("Flip");   on: panel.flip;   onClicked: panel.setFlip(!panel.flip) }
             PanelButton { label: qsTr("Mirror"); on: panel.mirror; onClicked: panel.setMirror(!panel.mirror) }
             PanelButton { label: qsTr("Swap");                     onClicked: settings.swapped = !settings.swapped }

@@ -1,7 +1,7 @@
-TeamMARS apps v2.0 — Linux (x86_64)
+TeamMARS apps v2.1 — Linux (x86_64)
 ===================================
 
-  TeamMARS-Telemetry_2.0_x86_64.AppImage     ground control + telemetry + camera panels (based on QGroundControl 5.1.5)
+  TeamMARS-Telemetry_2.1_x86_64.AppImage     ground control + telemetry + camera panels (based on QGroundControl 5.1.5)
   TeamMARS-PID-tuner_5.1.1_x86_64.AppImage   ArduPilot setup + PID tuning (based on ArduPilot Methodic Configurator)
 
 Needs: Ubuntu 24.04 or newer (or another recent 64-bit Linux).
@@ -15,7 +15,7 @@ TeamMARS-Telemetry layout: status bar at the bottom, Takeoff/Land/RTL/Pause just
 attitude + compass on the left, telemetry numbers on top.
 
 Cameras: press "Cameras" in the bottom strip. Hover a panel -> URL -> paste the camera stream
-(e.g. rtsp://192.168.144.25:8554/main.264) -> Enter. Hover again for Flip / Mirror / Swap / Size.
+(e.g. rtsp://192.168.144.25:8554/main.264) -> Enter. Hover again for Fill/Fit / Flip / Mirror / Swap / Size.
 AI detection (optional): see the vision/ folder on GitHub — setup.sh once, then run_vision.sh;
 camera panel 2 shows the YOLO boxes.
 

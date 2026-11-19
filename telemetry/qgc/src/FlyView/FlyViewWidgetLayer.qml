@@ -54,10 +54,10 @@ Item {
         rightEdgeBottomInset:   cameraPanels.rightEdgeInset
         topEdgeLeftInset:       mapScale.topEdgeCenterInset
         topEdgeCenterInset:     telemetryBar.topEdgeCenterInset
-        topEdgeRightInset:      Math.max(topRightPanel.topEdgeRightInset, cameraPanels.active ? cameraPanels.panelHeight + _layoutMargin : 0)
+        topEdgeRightInset:      topRightPanel.topEdgeRightInset
         bottomEdgeLeftInset:    virtualJoystickMultiTouch.visible ? virtualJoystickMultiTouch.bottomEdgeLeftInset : parentToolInsets.bottomEdgeLeftInset
         bottomEdgeCenterInset:  toolStrip.bottomEdgeCenterInset
-        bottomEdgeRightInset:   virtualJoystickMultiTouch.visible ? virtualJoystickMultiTouch.bottomEdgeRightInset : (cameraPanels.active ? cameraPanels.panelHeight + _layoutMargin : 0)
+        bottomEdgeRightInset:   virtualJoystickMultiTouch.visible ? virtualJoystickMultiTouch.bottomEdgeRightInset : 0
     }
 
     // TeamMARS: optional camera feeds on the right edge (toggled with the "Cameras" tool-strip button)
@@ -81,11 +81,15 @@ Item {
         property real leftEdgeCenterInset: visible ? x + width + _layoutMargin : 0
     }
 
+    // TeamMARS: centred items stay centred in the map area left of the camera column
+    property real _mapCenterOffset: -cameraPanels.rightEdgeInset / 2
+
     // TeamMARS: telemetry values centred along the top
     TelemetryValuesBar {
         id:                         telemetryBar
         anchors.top:                parent.top
         anchors.horizontalCenter:   parent.horizontalCenter
+        anchors.horizontalCenterOffset: _mapCenterOffset
         settingsGroup:              factValueGrid.telemetryBarSettingsGroup
         specificVehicleForCard:     null // Tracks active vehicle
         visible:                    !QGroundControl.videoManager.fullScreen
@@ -181,11 +185,12 @@ Item {
     FlyViewToolStrip {
         id:                         toolStrip
         anchors.horizontalCenter:   parent.horizontalCenter
+        anchors.horizontalCenterOffset: _mapCenterOffset
         anchors.bottom:             parent.bottom
         z:                          QGroundControl.zOrderWidgets
         horizontal:                 true
         maxHeight:                  parent.height
-        maxWidth:                   parent.width - (instrumentPanel.leftEdgeCenterInset + cameraPanels.rightEdgeInset) * 2
+        maxWidth:                   parent.width - instrumentPanel.leftEdgeCenterInset * 2 - cameraPanels.rightEdgeInset
         visible:                    !QGroundControl.videoManager.fullScreen
 
         onDisplayPreFlightChecklist: {
@@ -199,8 +204,9 @@ Item {
     }
 
     VehicleWarnings {
-        anchors.centerIn:   parent
-        z:                  QGroundControl.zOrderTopMost
+        anchors.centerIn:                   parent
+        anchors.horizontalCenterOffset:     _mapCenterOffset
+        z:                                  QGroundControl.zOrderTopMost
     }
 
     MapScale {

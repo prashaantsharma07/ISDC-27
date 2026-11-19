@@ -377,3 +377,12 @@ ArduCopter (`devtools/fake_vehicle.py`): mode list, battery pop-up, takeoff conf
 - Measured on this laptop (i7-10750H, CPU only): **YOLO11n 27 ms/frame, ~18.6 fps**, test frame: 1 bus + 3 people.
 - Separate process on purpose: AI can never freeze telemetry or the map.
 - Tested end to end with an ffmpeg fake camera (H.264 over UDP) → panel 1 raw, panel 2 YOLO.
+
+---
+
+## Step 25 — Bigger camera feeds (v2.1, 2026-11-19)
+
+- Each camera panel is now **half the map height** (CAM 1 top half, CAM 2 bottom half); width unchanged ("Size" still changes it).
+- New per-panel **Fill / Fit** button: Fill (default) makes the picture fill the tall panel by trimming the sides; Fit shows the whole frame.
+- Map compensation: the camera column counts as a full-height right inset, and the telemetry bar, Takeoff strip and
+  vehicle warnings are centred in the map area **left of the cameras**.

@@ -5,7 +5,7 @@
 Built on QGroundControl 5.1.5. Every flight feature of the original, rearranged around the pilot.</p>
 
 <p align="center">
-<a href="https://github.com/prashaantsharma07/ISDC-27/releases/latest"><b>⬇ Download v2.0 (Linux AppImage)</b></a>
+<a href="https://github.com/prashaantsharma07/ISDC-27/releases/latest"><b>⬇ Download v2.1 (Linux AppImage)</b></a>
 </p>
 
 ![TeamMARS-Telemetry connected, both camera panels live](docs/images/after_connected_cameras.jpg)
@@ -17,7 +17,7 @@ Built on QGroundControl 5.1.5. Every flight feature of the original, rearranged 
 | **Where your eyes go** | Instruments bottom-right, actions top-left, status top — gaze zig-zags across the screen | **Symmetric cockpit**: attitude + compass on the left edge at eye level, numbers centred on top, controls centred at the bottom |
 | **Takeoff / Land / RTL / Pause** | Vertical strip in the top-left corner | **Centred row right above the status bar** — one short reach, the same spot every flight |
 | **Status bar** | Top | **Bottom**, like a car dashboard; every pop-up (battery, GPS, flight modes, menu) opens **upward** from where you clicked |
-| **Live video** | One video picture-in-picture | **Two camera panels** (top-right + bottom-right) with **flip, mirror, swap, 3 sizes, per-camera URL** — all remembered |
+| **Live video** | One video picture-in-picture | **Two camera panels, each half the screen height** (top-right + bottom-right) with **fill/fit, flip, mirror, swap, 3 widths, per-camera URL** — all remembered; the map, numbers and controls re-centre beside them |
 | **AI on the camera** | None | **TeamMARS Vision**: YOLO object detection or OpenCV motion/edges, shown live in panel 2 |
 | **Map space** | Panels can cover the vehicle | Every panel reports its size; the map keeps the vehicle in the clear space between them |
 | **Look** | Flat grey | **Liquid-glass** UI in bottle green, bone and vermilion — drawn with gradients, no blur, so no FPS cost |
@@ -47,7 +47,7 @@ Built on QGroundControl 5.1.5. Every flight feature of the original, rearranged 
 
 | App | File | Based on |
 |---|---|---|
-| **TeamMARS-Telemetry** — ground control, telemetry, cameras | `TeamMARS-Telemetry_2.0_x86_64.AppImage` | QGroundControl 5.1.5 |
+| **TeamMARS-Telemetry** — ground control, telemetry, cameras | `TeamMARS-Telemetry_2.1_x86_64.AppImage` | QGroundControl 5.1.5 |
 | **TeamMARS-PID-tuner(DRONE)** — setup & PID tuning | `TeamMARS-PID-tuner_5.1.1_x86_64.AppImage` | ArduPilot Methodic Configurator 5.1.1 |
 | **TeamMARS Vision** — YOLO / OpenCV helper | [`vision/`](vision/) (Python) | Ultralytics YOLO11, OpenCV |
 
@@ -57,7 +57,7 @@ Details: [`share/HOW_TO_RUN.txt`](share/HOW_TO_RUN.txt).
 ### Cameras in 20 seconds
 1. Press **Cameras** in the bottom strip → two panels appear on the right.
 2. Hover a panel → **URL** → paste your camera stream (e.g. `rtsp://192.168.144.25:8554/main.264`) → Enter.
-3. Hover again for **Flip / Mirror / Swap / Size**. Double-click to enlarge.
+3. Hover again for **Fill/Fit / Flip / Mirror / Swap / Size**. Double-click to widen.
 4. Want AI? Run `vision/setup.sh` once, then `vision/run_vision.sh` — panel 2 shows the detections.
 
 ## What is in this repo
