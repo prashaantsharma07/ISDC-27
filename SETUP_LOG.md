@@ -354,3 +354,16 @@ Plan View is unchanged (bar on top, vertical tool strip). Checked connected and 
 ArduCopter (`devtools/fake_vehicle.py`): mode list, battery pop-up, takeoff confirm, altitude slider.
 
 ---
+
+## Step 23 — Optional dual camera panels (2026-11-19)
+
+- New **Cameras** button in the tool strip toggles two camera boxes on the right edge (top + bottom). Off by default.
+- Each box: any FFmpeg stream (`rtsp://`, `udp://`, `http://` MJPEG/HLS, files); **Flip** (upside-down), **Mirror**,
+  **Swap** top/bottom, **Size** (3 sizes, double-click to enlarge), **URL** editor. All remembered.
+- Low-latency playback, no audio, auto-reconnect every 3 s; vehicle panels and the altitude slider move aside.
+- Uses Qt Multimedia, separate from QGC's GStreamer video, so it cannot disturb the main video or telemetry.
+- Fix: Qt's VA-API path swapped red/blue on MJPEG (Intel GPU). Qt Multimedia now decodes in software
+  (`main.cc`, override with `QT_FFMPEG_DECODING_HW_DEVICE_TYPES`). Whole app with both feeds live: ~30 % of one core.
+- Settings: `[TeamMARSCameras]` in `~/.config/TeamMARS/TeamMARS-Telemetry.ini`.
+
+---

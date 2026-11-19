@@ -1,4 +1,5 @@
 #include "QGCApplication.h"
+#include <QtCore/QtEnvironmentVariables>
 #include "QGCCommandLineParser.h"
 #include "LogManager.h"
 #include "QGCLoggingCategory.h"
@@ -21,6 +22,13 @@ int main(int argc, char *argv[])
     // --- Platform initialization ---
     if (const auto exitCode = Platform::initialize(argc, argv, args)) {
         return *exitCode;
+    }
+
+    // TeamMARS: Qt Multimedia (used only by the optional camera panels) decodes in software.
+    // Its VA-API path swaps red/blue on MJPEG streams on Intel GPUs. QGC's own video uses GStreamer
+    // and is not affected. Set QT_FFMPEG_DECODING_HW_DEVICE_TYPES yourself to override.
+    if (!qEnvironmentVariableIsSet("QT_FFMPEG_DECODING_HW_DEVICE_TYPES")) {
+        qputenv("QT_FFMPEG_DECODING_HW_DEVICE_TYPES", "none");
     }
 
     QGCApplication app(argc, argv, args);
