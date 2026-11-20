@@ -1,4 +1,5 @@
 # TeamMARS object detection. Install with setup.sh / setup.bat (they add the CPU PyTorch index).
+# First start downloads the general model (yolov8m-oiv7, ~55 MB).
 torch
 torchvision
 ultralytics

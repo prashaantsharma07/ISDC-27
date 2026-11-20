@@ -12,7 +12,6 @@ One frame in flight per client, so detections never queue up and never lag the v
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import re
 import threading
@@ -78,81 +77,78 @@ def condition_hint(target: str, box: list[float], conf: float, frame_w: int, fra
 
 # ------------------------------------------------------------------ detector
 class Detector:
+    """General model (Open Images, 601 object types) + optional custom TeamMARS model for the mission items."""
+
     def __init__(self):
         self.lock = threading.Lock()
-        self.model = None
-        self.mode = "none"
-        self.map: dict[int, str] = {}
+        self.general: dict[int, object] = {}  # imgsz -> model (OpenVINO builds are fixed-size)
+        self.custom = None
+        self.backend = "pytorch"
         self.load()
 
-    def load(self):
-        from ultralytics import YOLO, YOLOWorld
+    def _ov(self, pt: str, tag: str, imgsz: int):
+        """OpenVINO build of a model for one input size (built once, ~5x faster on Intel CPUs)."""
+        from ultralytics import YOLO
 
-        models = ROOT / "models"
+        ov = ROOT / "models" / f"{tag}_{imgsz}_openvino_model"
+        if ov.exists():
+            return YOLO(str(ov), task="detect"), "openvino"
+        src = ROOT / "models" / pt if (ROOT / "models" / pt).exists() else pt
+        try:
+            import openvino  # noqa: F401, PLC0415
+            print(f"Building fast OpenVINO model {tag} @ {imgsz} (once, ~30 s)…")
+            out = Path(YOLO(str(src)).export(format="openvino", imgsz=imgsz, verbose=False))
+            out.rename(ov)
+            return YOLO(str(ov), task="detect"), "openvino"
+        except Exception as e:  # stays on PyTorch: slower but works
+            print("OpenVINO not used:", e)
+            return YOLO(str(src)), "pytorch"
+
+    def general_model(self, imgsz: int):
+        if imgsz not in self.general:
+            self.general[imgsz], self.backend = self._ov(CFG["general_model"], "general_" + Path(CFG["general_model"]).stem, imgsz)
+            self.general[imgsz].predict(np.zeros((imgsz, imgsz, 3), np.uint8), imgsz=imgsz, verbose=False)
+        return self.general[imgsz]
+
+    def load(self):
+        from ultralytics import YOLO
+
         custom = ROOT / CFG["custom_model"]
-        targets = [t["name"] for t in CFG["targets"]]
         if custom.exists():
             ov = custom.with_name(custom.stem + "_openvino_model")
-            m = YOLO(str(ov), task="detect") if ov.exists() else YOLO(str(custom))
-            self.backend = "openvino" if ov.exists() else "pytorch"
-            self.map = {i: n for i, n in m.names.items()}
-            self.mode = "custom"
-        else:
-            prompts, owner = [], []
-            for t in CFG["targets"]:
-                for p in t["prompts"]:
-                    prompts.append(p)
-                    owner.append(t["name"])
-            self.map = dict(enumerate(owner))
-            self.mode = "starter"
-            # OpenVINO build of the starter model for exactly these prompts (~5x faster on Intel CPUs)
-            key = hashlib.sha1(json.dumps([CFG["starter_model"], prompts, CFG["imgsz"]]).encode()).hexdigest()[:10]
-            ov = models / f"starter_{key}_openvino_model"
-            m, self.backend = None, "pytorch"
-            if ov.exists():
-                m, self.backend = YOLO(str(ov), task="detect"), "openvino"
-            else:
-                w = models / CFG["starter_model"]
-                world = YOLOWorld(str(w) if w.exists() else CFG["starter_model"])
-                world.set_classes(prompts)
-                m = world
-                try:
-                    import openvino  # noqa: F401, PLC0415
-                    print("Building the fast (OpenVINO) starter model once — about a minute…")
-                    out = Path(world.export(format="openvino", imgsz=CFG["imgsz"]))
-                    out.rename(ov)
-                    m, self.backend = YOLO(str(ov), task="detect"), "openvino"
-                except Exception as e:  # stays on PyTorch: slower but works
-                    print("OpenVINO not used:", e)
-        self.model = m
-        self.targets = targets
-        dummy = np.zeros((CFG["imgsz"], CFG["imgsz"], 3), np.uint8)
-        m.predict(dummy, imgsz=CFG["imgsz"], verbose=False)  # warm-up
+            self.custom = YOLO(str(ov), task="detect") if ov.exists() else YOLO(str(custom))
+        self.general_model(CFG["imgsz"])
 
-    def detect(self, img: np.ndarray, conf: float, imgsz: int, enabled: set[str] | None):
+    @property
+    def mode(self):
+        return "custom" if self.custom else "general"
+
+    def detect(self, img: np.ndarray, conf: float, imgsz: int, show_all: bool):
+        class_to_target = {c.lower(): t["name"] for t in CFG["targets"] for c in t["classes"]}
         with self.lock:
             t0 = time.perf_counter()
-            r = self.model.predict(img, imgsz=imgsz, conf=conf, verbose=False)[0]
+            results = [(self.general_model(imgsz).predict(img, imgsz=imgsz, conf=conf, verbose=False)[0], False)]
+            if self.custom:
+                results.append((self.custom.predict(img, imgsz=imgsz, conf=conf, verbose=False)[0], True))
             infer_ms = (time.perf_counter() - t0) * 1000
         H, W = img.shape[:2]
-        best: dict[tuple, dict] = {}
         out = []
-        for b in r.boxes:
-            target = self.map.get(int(b.cls[0]), r.names[int(b.cls[0])])
-            if enabled and target not in enabled:
-                continue
-            x1, y1, x2, y2 = (float(v) for v in b.xyxy[0])
-            c = float(b.conf[0])
-            crop = img[max(0, int(y1)): int(y2), max(0, int(x1)): int(x2)]
-            box = [x1 / W, y1 / H, x2 / W, y2 / H]
-            out.append({"target": target, "conf": round(c, 3), "box": [round(v, 4) for v in box],
-                        "colour": colour_of(crop), "hint": condition_hint(target, box, c, W, H)})
-        # several prompts can hit the same object: keep the strongest per target+location
-        out.sort(key=lambda d: -d["conf"])
-        for d in out:
-            key = (d["target"], round(d["box"][0], 1), round(d["box"][1], 1))
-            best.setdefault(key, d)
-        return list(best.values()), infer_ms
+        for r, is_custom in results:
+            for b in r.boxes:
+                label = r.names[int(b.cls[0])]
+                target = label if is_custom else class_to_target.get(label.lower())
+                if not target and not show_all:
+                    continue
+                x1, y1, x2, y2 = (float(v) for v in b.xyxy[0])
+                c = float(b.conf[0])
+                crop = img[max(0, int(y1)): int(y2), max(0, int(x1)): int(x2)]
+                box = [x1 / W, y1 / H, x2 / W, y2 / H]
+                d = {"label": label, "target": target, "conf": round(c, 3), "box": [round(v, 4) for v in box]}
+                if target:  # colour + hints only where it matters (saves time)
+                    d["colour"] = colour_of(crop)
+                    d["hint"] = condition_hint(target, box, c, W, H)
+                out.append(d)
+        return out, infer_ms
 
 
 app = FastAPI(title=CFG["app_name"])
@@ -170,13 +166,35 @@ async def _startup():
 async def status():
     counts = {d.name: len(list(d.glob("*.jpg"))) for d in DATASET.glob("*") if d.is_dir()} if DATASET.exists() else {}
     return {"app": CFG["app_name"], "mode": detector.mode if detector else "loading", "backend": detector.backend if detector else "",
-            "targets": [t["name"] for t in CFG["targets"]], "conf": CFG["conf"], "imgsz": CFG["imgsz"], "dataset": counts}
+            "targets": CFG["targets"], "conf": CFG["conf"], "imgsz": CFG["imgsz"], "dataset": counts}
+
+
+@app.get("/api/classes")
+async def classes():
+    """Every object type the general model knows (for the target editor)."""
+    m = detector.general_model(CFG["imgsz"]) if detector else None
+    return sorted(m.names.values()) if m else []
+
+
+@app.post("/api/targets")
+async def set_targets(body: dict):
+    """Replace the mission list: [{"name": "...", "classes": ["Hammer", ...]}]. Saved to config.json."""
+    known = {n.lower(): n for n in (await classes())}
+    targets = []
+    for t in body.get("targets", []):
+        name = str(t.get("name", "")).strip()[:40]
+        cls = [known[c.lower()] for c in t.get("classes", []) if c.lower() in known]
+        if name and cls:
+            targets.append({"name": name, "classes": cls})
+    CFG["targets"] = targets
+    (ROOT / "config.json").write_text(json.dumps(CFG, indent=2) + "\n")
+    return {"targets": targets}
 
 
 @app.websocket("/ws/detect")
 async def ws_detect(ws: WebSocket):
     await ws.accept()
-    conf, imgsz, enabled = CFG["conf"], CFG["imgsz"], None
+    conf, imgsz, show_all = CFG["conf"], CFG["imgsz"], True
     try:
         while True:
             msg = await ws.receive()
@@ -184,7 +202,7 @@ async def ws_detect(ws: WebSocket):
                 s = json.loads(msg["text"])
                 conf = float(s.get("conf", conf))
                 imgsz = int(s.get("imgsz", imgsz))
-                enabled = set(s["enabled"]) if s.get("enabled") else None
+                show_all = bool(s.get("showAll", show_all))
                 continue
             data = msg.get("bytes")
             if not data:
@@ -195,7 +213,7 @@ async def ws_detect(ws: WebSocket):
             img = cv2.imdecode(np.frombuffer(data[4:], np.uint8), cv2.IMREAD_COLOR)
             if img is None:
                 continue
-            dets, ms = await asyncio.to_thread(detector.detect, img, conf, imgsz, enabled)
+            dets, ms = await asyncio.to_thread(detector.detect, img, conf, imgsz, show_all)
             await ws.send_text(json.dumps({"seq": seq, "ms": round(ms, 1), "mode": detector.mode, "dets": dets}))
     except WebSocketDisconnect:
         pass
@@ -209,7 +227,7 @@ def _slug(name: str) -> str:
 async def capture(target: str = Form(...), image: UploadFile = File(...)):
     """Save a full-resolution frame for training the custom model."""
     if target not in [t["name"] for t in CFG["targets"]]:
-        return JSONResponse({"error": "unknown target"}, 400)
+        return JSONResponse({"error": "unknown target"}, 400)  # train only the mission items
     d = DATASET / _slug(target)
     d.mkdir(parents=True, exist_ok=True)
     f = d / f"{datetime.now():%Y%m%d-%H%M%S-%f}.jpg"

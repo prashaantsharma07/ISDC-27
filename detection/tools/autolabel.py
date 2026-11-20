@@ -37,7 +37,9 @@ def main():
     a = ap.parse_args()
 
     names = [t["name"] for t in CFG["targets"]]  # class ids follow config.json order
-    prompts = {t["name"]: t["prompts"] for t in CFG["targets"]}
+    # words Grounding DINO looks for: the target's own name parts + its object types (e.g. "box", "sensor cube")
+    prompts = {t["name"]: list(dict.fromkeys([w.strip().lower() for w in t["name"].split("/")] + [c.lower() for c in t["classes"]]))
+               for t in CFG["targets"]}
     proc = AutoProcessor.from_pretrained(a.model)
     model = AutoModelForZeroShotObjectDetection.from_pretrained(a.model).eval()
 

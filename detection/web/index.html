@@ -8,47 +8,50 @@
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
-<!-- SVG filter used by the liquid "goo" selection highlight -->
-<svg width="0" height="0" style="position:absolute">
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <filter id="goo"><feGaussianBlur in="SourceGraphic" stdDeviation="6" result="b"/>
     <feColorMatrix in="b" mode="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 22 -9" result="g"/><feBlend in="SourceGraphic" in2="g"/></filter>
 </svg>
+<canvas id="galaxy" aria-hidden="true"></canvas>
 
-<main id="stage">
+<main id="app">
+  <!-- top bar: centred over the video area -->
+  <header id="topbar" class="glass">
+    <img src="mars.png" alt="" class="logo">
+    <div class="brand-text"><b>TeamMARS</b><span>object detection</span></div>
+    <span class="grow"></span>
+    <span class="stat" title="camera frame rate"><i class="dot" id="camDot"></i><b id="camFps">–</b> fps</span>
+    <span class="stat" title="detection round trip"><b id="detMs">–</b> ms</span>
+    <span class="badge" id="modeBadge">…</span>
+  </header>
+
   <video id="cam" playsinline muted autoplay></video>
-  <canvas id="view"></canvas>
+  <div id="frame"><canvas id="view"></canvas></div>
   <canvas id="overlay"></canvas>
 
   <div id="nofeed" class="glass card center">
     <img src="mars.png" alt="" class="logo-big">
     <h1>TeamMARS object detection</h1>
-    <p>Pick a camera to start. The picture is shown straight from the camera — detection runs beside it, so it never slows the feed.</p>
+    <p>The picture comes straight from the camera. Detection runs beside it, so it never slows the feed.</p>
     <button class="btn primary" data-act="start">Start camera</button>
   </div>
 
-  <!-- brand + live stats -->
-  <header id="brand" class="glass pill">
-    <img src="mars.png" alt="" class="logo">
-    <div class="brand-text"><b>TeamMARS</b><span>object detection</span></div>
-    <span class="sep"></span>
-    <span class="stat" title="camera frame rate"><i class="dot" id="camDot"></i><b id="camFps">–</b> fps</span>
-    <span class="stat" title="time to detect one frame"><b id="detMs">–</b> ms</span>
-    <span class="badge" id="modeBadge" title="detection model">…</span>
-  </header>
-
-  <!-- mission: the competition items -->
-  <aside id="mission" class="glass panel">
+  <!-- mission column -->
+  <aside id="mission" class="glass">
     <div class="panel-head">
       <h2>Mission</h2>
       <span id="foundCount" class="count">0 / 0</span>
-      <button class="icon" data-act="collapse" title="Hide / show">⌄</button>
+      <button class="icon" data-act="edit" title="Edit targets">✎</button>
+      <button class="icon" data-act="collapse" title="Hide panel">›</button>
     </div>
     <div id="cards" class="cards"></div>
-    <button class="btn wide" data-act="report">Export report</button>
+    <div id="editor" class="editor" hidden></div>
+    <button class="btn wide" data-act="report" id="reportBtn">Export report</button>
   </aside>
+  <button id="missionTab" class="glass tab" data-act="collapse" title="Show mission">‹ Mission <b id="tabCount">0/0</b></button>
 
-  <!-- bottom dock -->
-  <nav id="dock" class="glass dock">
+  <!-- bottom dock: centred under the video -->
+  <nav id="dock" class="glass">
     <div class="seg" id="viewSeg">
       <span class="liquid" aria-hidden="true"></span>
       <button data-toggle="mirror" title="Mirror left/right (M)">⇋<em>Mirror</em></button>
@@ -61,14 +64,14 @@
       <input type="range" id="lutMix" min="0" max="1" step="0.01" value="1" title="LUT strength">
     </div>
     <div class="seg">
-      <button data-toggle="detect" class="on" title="Detection on/off (D)">◎<em>Detect</em></button>
+      <button data-toggle="detect" title="Detection on/off (D)">◎<em>Detect</em></button>
+      <button data-toggle="showAll" title="Show every object, not only the mission items (A)">▦<em>All</em></button>
       <button data-act="snap" title="Save a snapshot (S)">◉<em>Snap</em></button>
       <button data-act="train" title="Collect training photos">✚<em>Train</em></button>
       <button data-act="settings" title="Settings">⚙<em>Settings</em></button>
     </div>
   </nav>
 
-  <!-- settings sheet -->
   <section id="settings" class="glass sheet" hidden>
     <div class="panel-head"><h2>Settings</h2><button class="icon" data-act="close">✕</button></div>
     <div class="grid">
@@ -76,24 +79,22 @@
       <label>Resolution<select id="resSel">
         <option value="1280x720">1280 × 720 (fast)</option><option value="1920x1080">1920 × 1080</option><option value="640x480">640 × 480 (FPV SD)</option></select></label>
       <label>Detection confidence <output id="confOut">25%</output><input type="range" id="conf" min="0.05" max="0.9" step="0.05" value="0.25"></label>
-      <label>Detection size<select id="imgsz"><option value="416">416 (fastest)</option><option value="480" selected>480 (balanced)</option><option value="640">640 (small objects)</option></select></label>
+      <label>Detection size<select id="imgsz"><option value="480" selected>480 (faster)</option><option value="640">640 (small / far objects)</option></select></label>
       <label>Exposure <output id="expOut">0</output><input type="range" id="exposure" min="-1" max="1" step="0.05" value="0"></label>
       <label>Contrast <output id="conOut">1.00</output><input type="range" id="contrast" min="0.5" max="1.8" step="0.05" value="1"></label>
       <label>Saturation <output id="satOut">1.00</output><input type="range" id="saturation" min="0" max="2" step="0.05" value="1"></label>
       <label>Load your own LUT (.cube)<input type="file" id="lutFile" accept=".cube"></label>
+      <label class="check"><input type="checkbox" id="galaxyOn" checked> Animated galaxy background</label>
     </div>
-    <h3>Look for</h3>
-    <div id="targetToggles" class="chips"></div>
-    <p class="fine">Tip: LUTs and exposure only change what <b>you</b> see. Detection always uses the untouched camera picture.</p>
+    <p class="fine">LUTs and exposure only change what <b>you</b> see. Detection always uses the untouched camera picture.</p>
   </section>
 
-  <!-- training sheet -->
   <section id="train" class="glass sheet" hidden>
     <div class="panel-head"><h2>Train your model</h2><button class="icon" data-act="close">✕</button></div>
     <ol class="steps">
-      <li>Put <b>one</b> item in view, pick it below and press <b>Burst</b> (20 photos). Move: different heights, angles, light, backgrounds — like the competition field.</li>
-      <li>Do this for every item (aim for 60–150 photos each).</li>
-      <li>On this PC run <code>tools/autolabel.py</code> then <code>tools/train.py</code> — the app switches to your model on restart.</li>
+      <li>Put <b>one</b> item in view, pick it below and press <b>Burst</b> (20 photos). Vary height, angle, light and background.</li>
+      <li>Do this for every item (60–150 photos each).</li>
+      <li>Run <code>tools/autolabel.py</code> then <code>tools/train.py</code>; restart the app and it uses your model.</li>
     </ol>
     <div class="grid">
       <label>Item<select id="trainItem"></select></label>
@@ -103,6 +104,7 @@
   </section>
 
   <div id="toast" class="glass toast" hidden></div>
+  <datalist id="classList"></datalist>
 </main>
 
 <script src="app.js" type="module"></script>

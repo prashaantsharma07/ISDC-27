@@ -44,7 +44,7 @@ Built on QGroundControl 5.1.5. Every flight feature of the original, rearranged 
 ## New: TeamMARS object detection
 
 A separate, cross-platform app for the camera laptops: it **finds only the competition items** (sensor cube, instrument box,
-hammer / hand tools, marker flag, tripod), names their **colour**, helps record their **condition**, reads **labels/brands**
+hammer / hand tools, marker flag, tripod — or any of 601 object types), names their **colour**, helps record their **condition**, reads **labels/brands**
 when visible, and exports a judge-ready report. The video goes camera → browser → GPU with **zero added latency**; detection
 runs beside it (OpenVINO: **66 ms vs 342 ms** per frame with plain PyTorch, measured). Includes a built-in workflow to train a
 fast model on your own items. → [`detection/`](detection/)

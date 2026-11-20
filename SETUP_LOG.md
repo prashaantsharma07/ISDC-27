@@ -422,3 +422,20 @@ short tripod) — locate, identify, assess condition. Plan: 3 laptops (telemetry
   mission checklist and HTML report. Launchers for Linux/macOS/Windows; dock launcher "TeamMARS object detection".
 - Pipeline verified end to end on a throwaway dataset: capture folders → auto-labels (8/8 hammer boxes correct) → train →
   OpenVINO → app loads it as "TeamMARS model".
+
+---
+
+## Step 28 — Object detection v1.1: 601-object model, galaxy UI, editable mission (2026-11-21)
+
+Feedback: nothing was detected (hammer in hand), UI felt off-centre, Mission panel could not be reopened, mission list fixed.
+
+- **Model:** YOLO-World starter replaced by **YOLOv8m Open Images V7** (601 object types incl. Hammer, Tripod, Flag, Box,
+  Wrench, Screwdriver). On test photos it found the hammer (34 %) and tripod (50 %) that every open-vocabulary model missed;
+  on the team's webcam frame: Human face 64 %, Man 57 %, Clothing. OpenVINO build at 480 / 640 px. ~1 GB of text-encoder
+  downloads no longer needed. Training workflow unchanged (custom model runs alongside for the mission items).
+- **Every object gets a box** (dashed white) with **All** on; mission items get an orange glow box + colour + card.
+- **Mission editor** (✎): add / rename / remove targets; each matched by any of the 601 types; saved to config.json instantly.
+- **Layout:** video centred in the space left of the Mission column; top bar and dock centred on the video.
+  Mission › hides the panel (video widens) and a "‹ Mission" tab always brings it back (bug fixed).
+- **Theme:** galaxy — black, shiny white, hazy orange; stars orbit the cursor with a liquid-lens bulge and trails; can be
+  turned off in Settings. Dark smoked-glass panels.
