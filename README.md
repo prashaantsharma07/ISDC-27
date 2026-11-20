@@ -41,6 +41,14 @@ Built on QGroundControl 5.1.5. Every flight feature of the original, rearranged 
 
 <p align="center"><img src="docs/images/vision_yolo.jpg" width="360" alt="TeamMARS Vision YOLO overlay"><br><i>TeamMARS Vision — YOLO overlay as streamed to camera panel 2</i></p>
 
+## New: TeamMARS object detection
+
+A separate, cross-platform app for the camera laptops: it **finds only the competition items** (sensor cube, instrument box,
+hammer / hand tools, marker flag, tripod), names their **colour**, helps record their **condition**, reads **labels/brands**
+when visible, and exports a judge-ready report. The video goes camera → browser → GPU with **zero added latency**; detection
+runs beside it (OpenVINO: **66 ms vs 342 ms** per frame with plain PyTorch, measured). Includes a built-in workflow to train a
+fast model on your own items. → [`detection/`](detection/)
+
 ## Download & run
 
 **➡ [Latest release](https://github.com/prashaantsharma07/ISDC-27/releases/latest)** — Linux x86_64, Ubuntu 24.04 or newer.
@@ -67,6 +75,7 @@ Details: [`share/HOW_TO_RUN.txt`](share/HOW_TO_RUN.txt).
 | [`telemetry/qgc/`](telemetry/qgc/) | Only the QGroundControl files we changed or added |
 | [`pid-tuner/amc/`](pid-tuner/amc/) | Only the Methodic Configurator files we changed or added |
 | [`vision/`](vision/) | TeamMARS Vision (YOLO / OpenCV) |
+| [`detection/`](detection/) | TeamMARS object detection: competition item finder (web app, any OS) |
 | [`devtools/`](devtools/) | Simulated ArduCopter for testing the UI without a drone |
 | [`params/`](params/) | Our drone's parameter lists and the safe sync tool |
 | [`brand/`](brand/) | MARS logo |

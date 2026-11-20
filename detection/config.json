@@ -1,0 +1,18 @@
+{
+  "app_name": "TeamMARS object detection",
+  "targets": [
+    {"name": "Sensor cube",    "prompts": ["cube", "sensor module", "small cube"]},
+    {"name": "Instrument box", "prompts": ["instrument box", "small box", "case"]},
+    {"name": "Hammer",         "prompts": ["hammer"]},
+    {"name": "Hand tool",      "prompts": ["wrench", "screwdriver", "pliers", "spanner"]},
+    {"name": "Marker flag",    "prompts": ["flag", "marker flag"]},
+    {"name": "Tripod",         "prompts": ["tripod", "tripod stand"]}
+  ],
+  "custom_model": "models/teammars.pt",
+  "starter_model": "yolov8s-worldv2.pt",
+  "conf": 0.25,
+  "imgsz": 480,
+  "brands": ["Stanley", "Bosch", "DeWalt", "Makita", "Black+Decker", "Craftsman", "Taparia", "Hitachi", "Milwaukee", "Fluke", "Manfrotto", "Benro", "Arduino", "Raspberry Pi"],
+  "host": "127.0.0.1",
+  "port": 8765
+}

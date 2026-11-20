@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TeamMARS object detection</title>
+<link rel="icon" href="mars.png">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<!-- SVG filter used by the liquid "goo" selection highlight -->
+<svg width="0" height="0" style="position:absolute">
+  <filter id="goo"><feGaussianBlur in="SourceGraphic" stdDeviation="6" result="b"/>
+    <feColorMatrix in="b" mode="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 22 -9" result="g"/><feBlend in="SourceGraphic" in2="g"/></filter>
+</svg>
+
+<main id="stage">
+  <video id="cam" playsinline muted autoplay></video>
+  <canvas id="view"></canvas>
+  <canvas id="overlay"></canvas>
+
+  <div id="nofeed" class="glass card center">
+    <img src="mars.png" alt="" class="logo-big">
+    <h1>TeamMARS object detection</h1>
+    <p>Pick a camera to start. The picture is shown straight from the camera — detection runs beside it, so it never slows the feed.</p>
+    <button class="btn primary" data-act="start">Start camera</button>
+  </div>
+
+  <!-- brand + live stats -->
+  <header id="brand" class="glass pill">
+    <img src="mars.png" alt="" class="logo">
+    <div class="brand-text"><b>TeamMARS</b><span>object detection</span></div>
+    <span class="sep"></span>
+    <span class="stat" title="camera frame rate"><i class="dot" id="camDot"></i><b id="camFps">–</b> fps</span>
+    <span class="stat" title="time to detect one frame"><b id="detMs">–</b> ms</span>
+    <span class="badge" id="modeBadge" title="detection model">…</span>
+  </header>
+
+  <!-- mission: the competition items -->
+  <aside id="mission" class="glass panel">
+    <div class="panel-head">
+      <h2>Mission</h2>
+      <span id="foundCount" class="count">0 / 0</span>
+      <button class="icon" data-act="collapse" title="Hide / show">⌄</button>
+    </div>
+    <div id="cards" class="cards"></div>
+    <button class="btn wide" data-act="report">Export report</button>
+  </aside>
+
+  <!-- bottom dock -->
+  <nav id="dock" class="glass dock">
+    <div class="seg" id="viewSeg">
+      <span class="liquid" aria-hidden="true"></span>
+      <button data-toggle="mirror" title="Mirror left/right (M)">⇋<em>Mirror</em></button>
+      <button data-toggle="flip" title="Flip upside-down (F)">⇅<em>Flip</em></button>
+      <button data-act="rotate" title="Rotate 90° (R)">⟳<em id="rotLabel">0°</em></button>
+      <button data-toggle="invert" title="Invert colours (I)">◐<em>Invert</em></button>
+    </div>
+    <div class="seg">
+      <label class="lut"><span>LUT</span><select id="lutSel"></select></label>
+      <input type="range" id="lutMix" min="0" max="1" step="0.01" value="1" title="LUT strength">
+    </div>
+    <div class="seg">
+      <button data-toggle="detect" class="on" title="Detection on/off (D)">◎<em>Detect</em></button>
+      <button data-act="snap" title="Save a snapshot (S)">◉<em>Snap</em></button>
+      <button data-act="train" title="Collect training photos">✚<em>Train</em></button>
+      <button data-act="settings" title="Settings">⚙<em>Settings</em></button>
+    </div>
+  </nav>
+
+  <!-- settings sheet -->
+  <section id="settings" class="glass sheet" hidden>
+    <div class="panel-head"><h2>Settings</h2><button class="icon" data-act="close">✕</button></div>
+    <div class="grid">
+      <label>Camera<select id="camSel"></select></label>
+      <label>Resolution<select id="resSel">
+        <option value="1280x720">1280 × 720 (fast)</option><option value="1920x1080">1920 × 1080</option><option value="640x480">640 × 480 (FPV SD)</option></select></label>
+      <label>Detection confidence <output id="confOut">25%</output><input type="range" id="conf" min="0.05" max="0.9" step="0.05" value="0.25"></label>
+      <label>Detection size<select id="imgsz"><option value="416">416 (fastest)</option><option value="480" selected>480 (balanced)</option><option value="640">640 (small objects)</option></select></label>
+      <label>Exposure <output id="expOut">0</output><input type="range" id="exposure" min="-1" max="1" step="0.05" value="0"></label>
+      <label>Contrast <output id="conOut">1.00</output><input type="range" id="contrast" min="0.5" max="1.8" step="0.05" value="1"></label>
+      <label>Saturation <output id="satOut">1.00</output><input type="range" id="saturation" min="0" max="2" step="0.05" value="1"></label>
+      <label>Load your own LUT (.cube)<input type="file" id="lutFile" accept=".cube"></label>
+    </div>
+    <h3>Look for</h3>
+    <div id="targetToggles" class="chips"></div>
+    <p class="fine">Tip: LUTs and exposure only change what <b>you</b> see. Detection always uses the untouched camera picture.</p>
+  </section>
+
+  <!-- training sheet -->
+  <section id="train" class="glass sheet" hidden>
+    <div class="panel-head"><h2>Train your model</h2><button class="icon" data-act="close">✕</button></div>
+    <ol class="steps">
+      <li>Put <b>one</b> item in view, pick it below and press <b>Burst</b> (20 photos). Move: different heights, angles, light, backgrounds — like the competition field.</li>
+      <li>Do this for every item (aim for 60–150 photos each).</li>
+      <li>On this PC run <code>tools/autolabel.py</code> then <code>tools/train.py</code> — the app switches to your model on restart.</li>
+    </ol>
+    <div class="grid">
+      <label>Item<select id="trainItem"></select></label>
+      <div class="row"><button class="btn" data-act="capture">Capture 1</button><button class="btn primary" data-act="burst">Burst 20</button></div>
+    </div>
+    <div id="dataset" class="chips"></div>
+  </section>
+
+  <div id="toast" class="glass toast" hidden></div>
+</main>
+
+<script src="app.js" type="module"></script>
+</body>
+</html>

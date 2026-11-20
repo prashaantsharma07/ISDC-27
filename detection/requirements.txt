@@ -1,0 +1,13 @@
+# TeamMARS object detection. Install with setup.sh / setup.bat (they add the CPU PyTorch index).
+torch
+torchvision
+ultralytics
+openvino          # ~5x faster inference on Intel CPUs (optional: falls back to PyTorch)
+fastapi
+uvicorn[standard]
+python-multipart
+opencv-python
+numpy
+pillow
+transformers      # tools/autolabel.py (Grounding DINO)
+# easyocr         # optional: "Read label / brand" button  ->  pip install easyocr

@@ -1,0 +1,8 @@
+.venv/
+models/
+dataset/
+runs/
+reports/
+web/test/
+*.log
+__pycache__/

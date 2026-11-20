@@ -401,3 +401,24 @@ adapter's own "no input signal" picture.
 - Panels start one after the other and count as live only when frames arrive; otherwise they restart that camera.
 - If both panels point at the same device, panel 2 says so instead of failing silently.
 - Result: both panels live at 1280×720 @ 60 fps alongside the real drone link.
+
+---
+
+## Step 27 — TeamMARS object detection (separate cross-platform app) (2026-11-21)
+
+Use case: 3–5 dummy items on the surface (sensor-like cube, instrument box, hand tools such as a hammer, marker flag,
+short tripod) — locate, identify, assess condition. Plan: 3 laptops (telemetry + one per camera).
+
+- **Model choice, tested on this laptop:** off-the-shelf open-vocabulary models (YOLO-World s/m, YOLOE s/m, YOLOE prompt-free)
+  were unreliable on these items (a clear hammer scored <5 %, prompt-free called it a "toothbrush"). Grounding DINO is accurate
+  (tripod 73 %, correct hammer box) but ~6 s/image on CPU → used for **auto-labelling**, not live.
+  → Live: **YOLO11n trained on the team's own photos** (capture in app → `tools/autolabel.py` → `tools/train.py`);
+  until then a YOLO-World "starter" model limited to the item names.
+- **Speed:** OpenVINO export of the starter model: **66 ms vs 342 ms (PyTorch)** per frame under the same load.
+- **Latency design:** camera → browser → WebGL shader → screen; detection on side snapshots over WebSocket, one in flight.
+  Measured in the app: 23–24 fps video with ~100–126 ms detection round trip.
+- App: `~/TeamMARS-detect` (FastAPI server + web UI), liquid glass in oat white / slate blue / black; mirror, flip, rotate,
+  invert; 6 original CC0 LUTs + any `.cube`; colour naming, condition hints/tags, label/brand reading (optional EasyOCR),
+  mission checklist and HTML report. Launchers for Linux/macOS/Windows; dock launcher "TeamMARS object detection".
+- Pipeline verified end to end on a throwaway dataset: capture folders → auto-labels (8/8 hammer boxes correct) → train →
+  OpenVINO → app loads it as "TeamMARS model".
