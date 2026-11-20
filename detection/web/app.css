@@ -165,5 +165,11 @@ code { background: rgba(255, 255, 255, .08); padding: 1px 6px; border-radius: 6p
   input[type=range] { width: 64px; }
 }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+.campick { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
+.campick button { text-align: left; }
+.campick button b { color: var(--orange); }
+.err { color: #FFB38A; font-size: 13px; line-height: 1.5; margin: 14px 0 0; }
+.banner { top: 80px; left: 50%; transform: translateX(-50%); padding: 10px 18px; font-size: 13px; border-radius: 14px; color: var(--shine); border-color: rgba(255, 154, 74, .6); max-width: min(640px, 90vw); text-align: center; z-index: 5; }
+.banner b { color: var(--orange); }
 /* the hidden attribute must win over display rules above */
 [hidden]:not(.sheet):not(.toast) { display: none !important; }

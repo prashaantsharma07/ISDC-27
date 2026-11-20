@@ -34,6 +34,8 @@
     <h1>TeamMARS object detection</h1>
     <p>The picture comes straight from the camera. Detection runs beside it, so it never slows the feed.</p>
     <button class="btn primary" data-act="start">Start camera</button>
+    <div id="camPick" class="campick" hidden></div>
+    <p id="camErr" class="err" hidden></p>
   </div>
 
   <!-- mission column -->
@@ -103,6 +105,7 @@
     <div id="dataset" class="chips"></div>
   </section>
 
+  <div id="signal" class="glass banner" hidden>⚠ <b>No video signal.</b> The capture adapter is connected but receives no picture from the drone receiver — check its power, channel and cable.</div>
   <div id="toast" class="glass toast" hidden></div>
   <datalist id="classList"></datalist>
 </main>

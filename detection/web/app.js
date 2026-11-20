@@ -473,23 +473,65 @@ async function listCameras() {
   if (S.camId && devs.some((d) => d.deviceId === S.camId)) sel.value = S.camId;
   return devs;
 }
+const CAM_HELP = {
+  NotAllowedError: "The browser blocked the camera. Click the camera icon in the address bar (Firefox: left of the address) and allow it, then press Start camera again.",
+  NotReadableError: "The camera is busy — another program is using it (for example a TeamMARS-Telemetry camera panel, OBS or a video call). Close it and try again.",
+  NotFoundError: "No camera found. Plug the capture adapter in (and give it a few seconds), then press Start camera.",
+  OverconstrainedError: "The camera did not accept the requested size; trying its default size instead.",
+};
+async function openStream(deviceId) {
+  const [w, h] = S.res.split("x").map(Number);
+  const base = deviceId ? { deviceId: { exact: deviceId } } : {};
+  try {   // preferred size / frame rate
+    return await navigator.mediaDevices.getUserMedia({ audio: false, video: { ...base, width: { ideal: w }, height: { ideal: h }, frameRate: { ideal: 60 } } });
+  } catch (e) {
+    if (e.name === "NotAllowedError" || e.name === "NotFoundError") throw e;
+    return await navigator.mediaDevices.getUserMedia({ audio: false, video: base });   // whatever the camera supports
+  }
+}
+async function showCameraPicker() {
+  const devs = await listCameras(), pick = $("#camPick");
+  pick.innerHTML = devs.map((d, i) => `<button class="btn" data-cam="${d.deviceId}">${/usb|capture|video/i.test(d.label) && !/integrated|webcam/i.test(d.label) ? "<b>Drone camera?</b> " : ""}${d.label || "Camera " + (i + 1)}</button>`).join("");
+  pick.hidden = devs.length < 2;
+  pick.querySelectorAll("[data-cam]").forEach((b) => (b.onclick = () => { S.camId = b.dataset.cam; save(); startCamera(); }));
+}
 async function startCamera() {
   const src = new URLSearchParams(location.search).get("src"); // test without a camera: ?src=test/demo.mp4
+  const err = $("#camErr"); err.hidden = true;
   try {
     if (src) { video.src = src; video.loop = true; await video.play(); }
     else {
       video.srcObject?.getTracks().forEach((t) => t.stop());
-      const [w, h] = S.res.split("x").map(Number);
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: false,
-        video: { deviceId: S.camId ? { exact: S.camId } : undefined, width: { ideal: w }, height: { ideal: h }, frameRate: { ideal: 60 } } });
+      let stream;
+      try { stream = await openStream(S.camId); }
+      catch (e) {
+        if (S.camId && e.name !== "NotAllowedError") { S.camId = ""; save(); stream = await openStream(""); }   // saved camera gone: use any
+        else throw e;
+      }
       video.srcObject = stream; await video.play();
       const id = stream.getVideoTracks()[0].getSettings().deviceId; if (id) { S.camId = id; save(); }
-      await listCameras();
+      await showCameraPicker();
     }
     $("#nofeed").classList.add("gone"); $("#camDot").classList.add("live"); startFrameLoop();
     video.onloadedmetadata = layout; layout(); pump();
-  } catch (e) { toast("Camera: " + e.message, 4000); }
+  } catch (e) {
+    $("#nofeed").classList.remove("gone");
+    err.textContent = (CAM_HELP[e.name] || "Camera error") + `  (${e.name}: ${e.message})`; err.hidden = false;
+    try { await showCameraPicker(); } catch { /* no permission yet */ }
+  }
 }
+
+// colour bars = the capture adapter's own "no input signal" picture
+const probe = document.createElement("canvas"); probe.width = 8; probe.height = 1;
+const pctx = probe.getContext("2d", { willReadFrequently: true });
+setInterval(() => {
+  if (video.readyState < 2) return;
+  pctx.drawImage(video, 0, video.videoHeight * 0.5, video.videoWidth, 1, 0, 0, 8, 1);
+  const p = pctx.getImageData(0, 0, 8, 1).data;
+  const want = [[255, 255, 255], [255, 255, 0], [0, 255, 255], [0, 255, 0], [255, 0, 255], [255, 0, 0], [0, 0, 255], [0, 0, 0]];
+  const bars = want.every((c, i) => Math.abs(p[i * 4] - c[0]) + Math.abs(p[i * 4 + 1] - c[1]) + Math.abs(p[i * 4 + 2] - c[2]) < 150);
+  $("#signal").hidden = !bars;
+}, 1000);
 
 // ---------------------------------------------------------------- controls
 function syncControls() {
